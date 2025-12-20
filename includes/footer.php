@@ -64,7 +64,7 @@
 .fab-item:hover::after { opacity: 1; }
 .fab-item i { font-size: 20px; }
 </style>
-
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 function toggleFabMenu() { document.getElementById('menuFlutuante').classList.toggle('active'); }
 // Fechar ao clicar fora
