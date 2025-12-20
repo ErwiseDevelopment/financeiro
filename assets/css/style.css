@@ -1,0 +1,228 @@
+:root {
+    --bg-body: #f8fafc; /* Cinza clarinho */
+    --bg-card: #ffffff; /* Branco puro */
+    --bg-input: #f1f5f9;
+    --accent-primary: #4f46e5; /* Indigo moderno */
+    --accent-success: #16a34a;
+    --accent-danger: #dc2626;
+    --text-main: #1e293b; /* Slate escuro para contraste */
+    --text-muted: #64748b;
+    --border-color: #e2e8f0;
+    --radius-lg: 20px;
+    --radius-md: 12px;
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+body {
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    padding-bottom: 110px;
+    line-height: 1.5;
+}
+
+/* Cards com Sombra Suave */
+.card-glass {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+}
+
+/* Saldo em Destaque */
+.balance-hero {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 2rem 1rem;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow);
+}
+
+/* Navegação por Meses */
+.month-selector {
+    display: flex; overflow-x: auto; gap: 8px; padding: 10px 0;
+    scrollbar-width: none;
+}
+.month-selector::-webkit-scrollbar { display: none; }
+
+.btn-month {
+    flex: 0 0 auto; padding: 8px 18px; border-radius: 50px;
+    background: #fff; border: 1px solid var(--border-color);
+    color: var(--text-muted); text-decoration: none; font-weight: 600; font-size: 0.85rem;
+    transition: 0.2s;
+}
+.btn-month.active { 
+    background: var(--text-main); color: white; border-color: var(--text-main);
+}
+
+/* Itens de Transação */
+.transaction-item {
+    background: #fff;
+    border-radius: var(--radius-md);
+    padding: 14px; margin-bottom: 10px;
+    border: 1px solid #f1f5f9; 
+    transition: 0.2s ease;
+}
+.transaction-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+
+/* Botão Flutuante (FAB) */
+.fab {
+    position: fixed; bottom: 30px; right: 25px;
+    width: 60px; height: 60px; border-radius: 50%;
+    background: var(--accent-primary); color: white; border: none;
+    font-size: 24px; box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+    z-index: 1000;
+}
+
+/* Inputs Estilizados */
+.form-control, .form-select {
+    background-color: var(--bg-input) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-main) !important;
+    padding: 12px 16px !important;
+    border-radius: var(--radius-md) !important;
+}
+
+/* Estilos Específicos para Formulários Modernos */
+.form-control-flush:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.btn-type-select {
+    color: var(--text-muted);
+    transition: 0.3s;
+    border: none !important;
+    background-color: transparent;
+}
+
+/* Cores dinâmicas para os botões de rádio no Light Mode */
+#entrada:checked + label {
+    background-color: #dcfce7 !important; /* Verde clarinho */
+    color: #16a34a !important;
+}
+
+#saida:checked + label {
+    background-color: #fee2e2 !important; /* Vermelho clarinho */
+    color: #dc2626 !important;
+}
+
+.input-group-text {
+    color: #94a3b8;
+    background-color: #f1f5f9;
+    border: none;
+}
+
+.form-label-caps {
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+/* Container do FAB e sub-botões */
+.fab-wrapper {
+    position: fixed;
+    bottom: 30px;
+    right: 25px;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    gap: 15px;
+    z-index: 9999;
+}
+
+/* Botão Principal */
+.fab-main {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Sub-botões escondidos por padrão */
+.fab-list {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    gap: 12px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(20px);
+    transition: 0.3s ease;
+}
+
+.fab-item {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: white;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    border: 1px solid #e2e8f0;
+    font-size: 20px;
+    position: relative;
+}
+
+/* Tooltips ao lado dos botões */
+.fab-item::after {
+    content: attr(data-label);
+    position: absolute;
+    right: 65px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    transition: 0.2s;
+}
+
+.fab-item:hover::after { opacity: 1; }
+
+/* Estado Ativo (quando clicado) */
+.fab-wrapper.active .fab-list {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.fab-wrapper.active .fab-main {
+    transform: rotate(135deg); /* Transforma o + em um X */
+    background: #64748b;
+}
+
+.card-stat {
+    border: none;
+    border-radius: 20px;
+    padding: 20px;
+    background: #ffffff;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+.stat-icon {
+    width: 45px;
+    height: 45px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    margin-bottom: 15px;
+}
