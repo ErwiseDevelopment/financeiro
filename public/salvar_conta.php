@@ -2,33 +2,55 @@
 require_once "../config/database.php";
 session_start();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SESSION['usuarioid'])) {
-    $uid         = $_SESSION['usuarioid'];
-    $descricao   = $_POST['contadescricao'];
-    $valor       = $_POST['contavalor'];
-    $vencimento  = $_POST['contavencimento'];
-    $parcelas    = (int)$_POST['contaparcela_total'];
-    $tipo        = $_POST['contatipo'];
-    $categoria   = $_POST['categoriaid'];
-    $fixa        = isset($_POST['contafixa']) ? 1 : 0;
-    $grupo_id    = bin2hex(random_bytes(8)); 
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $uid = $_SESSION['usuarioid'];
+    $tipo = $_POST['contatipo'];
+    $valor = $_POST['contavalor']; // Recebe o valor limpo (ex: 1250.50) do campo hidden
+    $descricao = $_POST['contadescricao'];
+    $categoriaid = $_POST['categoriaid'];
+    $data_vencimento_original = $_POST['contavencimento'];
+    $parcelas_total = (int)$_POST['contaparcela_total'];
+    $situacao = "Pendente"; // Todo lançamento novo nasce pendente
 
     try {
         $pdo->beginTransaction();
-        for ($i = 0; $i < $parcelas; $i++) {
-            // Calcula vencimento: adiciona $i meses à data inicial
-            $data_venc   = date('Y-m-d', strtotime("+$i month", strtotime($vencimento)));
-            $competencia = date('Y-m', strtotime($data_venc));
+
+        for ($i = 1; $i <= $parcelas_total; $i++) {
+            // Calcula a data de vencimento para a parcela atual
+            // P1 = Data Original, P2 = +1 mês, etc.
+            $meses_adicionar = $i - 1;
+            $data_vencimento = date('Y-m-d', strtotime("+$meses_adicionar month", strtotime($data_vencimento_original)));
             
-            $sql = $pdo->prepare("INSERT INTO contas 
-                (usuarioid, categoriaid, contadescricao, contavalor, contavencimento, contacompetencia, contaparcela_atual, contaparcela_total, contagrupoid, contatipo, contafixa) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $sql->execute([$uid, $categoria, $descricao, $valor, $data_venc, $competencia, ($i + 1), $parcelas, $grupo_id, $tipo, $fixa]);
+            // Define a competência (YYYY-MM) com base no vencimento da parcela
+            $competencia = date('Y-m', strtotime($data_vencimento));
+
+            // Ajusta a descrição para mostrar a parcela (ex: Internet 1/3)
+            $descricao_parcelada = ($parcelas_total > 1) ? $descricao . " ($i/$parcelas_total)" : $descricao;
+
+            $sql = "INSERT INTO contas (usuarioid, contatipo, contavalor, contadescricao, categoriaid, contavencimento, contacompetencia, contasituacao, contaparcela_num, contaparcela_total) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([
+                $uid, 
+                $tipo, 
+                $valor, 
+                $descricao_parcelada, 
+                $categoriaid, 
+                $data_vencimento, 
+                $competencia, 
+                $situacao,
+                $i, // Número da parcela atual
+                $parcelas_total // Total de parcelas
+            ]);
         }
+
         $pdo->commit();
-        header("Location: index.php?sucesso=1");
+        header("Location: index.php?msg=sucesso");
+        exit();
+
     } catch (Exception $e) {
         $pdo->rollBack();
-        die("Erro ao projetar contas: " . $e->getMessage());
+        echo "Erro ao salvar: " . $e->getMessage();
     }
 }
