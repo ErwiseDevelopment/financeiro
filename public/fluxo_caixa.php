@@ -6,13 +6,21 @@ $uid = $_SESSION['usuarioid'];
 $mes_filtro = $_GET['mes'] ?? date('Y-m');
 $mensagem = "";
 
+// --- LÓGICA DE EXCLUSÃO ---
+if (isset($_GET['acao']) && $_GET['acao'] === 'excluir' && isset($_GET['id'])) {
+    $id = $_GET['id'];
+    $sql = $pdo->prepare("DELETE FROM contas WHERE contasid = ? AND usuarioid = ?");
+    if ($sql->execute([$id, $uid])) {
+        $mensagem = "<div class='alert alert-danger border-0 shadow-sm small py-2 rounded-3 mb-4'>Lançamento excluído com sucesso!</div>";
+    }
+}
+
 // --- LÓGICA DE ATUALIZAÇÃO (EDITAR) ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['acao'] === 'editar') {
     $id = $_POST['id'];
     $descricao = $_POST['descricao'];
     $valor = $_POST['valor'];
     $vencimento = $_POST['vencimento'];
-    // Recalcula a competência caso a data mude (ex: 2023-10-15 -> 2023-10)
     $competencia = date('Y-m', strtotime($vencimento));
 
     $sql = $pdo->prepare("UPDATE contas SET contadescricao = ?, contavalor = ?, contavencimento = ?, contacompetencia = ? WHERE contasid = ? AND usuarioid = ?");
@@ -103,9 +111,11 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                                    class="btn btn-action <?= $e['contasituacao'] == 'Pendente' ? 'btn-success' : 'btn-light border' ?>">
                                    <?= $e['contasituacao'] == 'Pendente' ? 'RECEBER' : 'ESTORNAR' ?>
                                 </a>
-                                <button type="button" class="btn btn-light border btn-action" 
-                                        onclick='abrirModalEdicao(<?= json_encode($e) ?>)'>
+                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($e) ?>)'>
                                     EDITAR
+                                </button>
+                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $e['contasid'] ?>)">
+                                    EXCLUIR
                                 </button>
                             </div>
                         </div>
@@ -138,9 +148,11 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                                    class="btn btn-action <?= $s['contasituacao'] == 'Pendente' ? 'btn-danger' : 'btn-light border' ?>">
                                    <?= $s['contasituacao'] == 'Pendente' ? 'PAGAR' : 'ESTORNAR' ?>
                                 </a>
-                                <button type="button" class="btn btn-light border btn-action" 
-                                        onclick='abrirModalEdicao(<?= json_encode($s) ?>)'>
+                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($s) ?>)'>
                                     EDITAR
+                                </button>
+                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $s['contasid'] ?>)">
+                                    EXCLUIR
                                 </button>
                             </div>
                         </div>
@@ -169,7 +181,7 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                     <div class="row g-3">
                         <div class="col-6">
                             <label class="form-label small fw-bold">Valor (R$)</label>
-                            <input type="number" step="0.01" name="valor" id="edit_valor" class="form-control rounded-3 border-light bg-light py-2" required>
+                            <input type="decimal" inputmode="decimal" step="0.01" name="valor" id="edit_valor" class="form-control rounded-3 border-light bg-light py-2" required>
                         </div>
                         <div class="col-6">
                             <label class="form-label small fw-bold">Vencimento</label>
@@ -187,9 +199,6 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
 </div>
 
 <script>
-/**
- * Passamos o objeto completo via JSON para evitar erros de aspas no JavaScript
- */
 function abrirModalEdicao(conta) {
     document.getElementById('edit_id').value = conta.contasid;
     document.getElementById('edit_descricao').value = conta.contadescricao;
@@ -198,6 +207,12 @@ function abrirModalEdicao(conta) {
     
     var myModal = new bootstrap.Modal(document.getElementById('modalEditarConta'));
     myModal.show();
+}
+
+function confirmarExclusao(id) {
+    if (confirm('Deseja realmente excluir este lançamento?')) {
+        window.location.href = `?mes=<?= $mes_filtro ?>&acao=excluir&id=${id}`;
+    }
 }
 </script>
 

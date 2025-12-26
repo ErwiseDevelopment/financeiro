@@ -2,11 +2,9 @@
 require_once "../config/database.php";
 require_once "../includes/header.php";
 
-// A sessão já é verificada no header.php conforme sua estrutura
 $uid = $_SESSION['usuarioid'];
 $tipo_pre = $_GET['tipo'] ?? 'Saída';
 
-// Busca as categorias
 $stmt_cat = $pdo->prepare("SELECT * FROM categorias WHERE usuarioid = ? ORDER BY categoriadescricao ASC");
 $stmt_cat->execute([$uid]);
 $categorias = $stmt_cat->fetchAll();
@@ -19,7 +17,7 @@ $categorias = $stmt_cat->fetchAll();
         <div style="width: 24px;"></div>
     </div>
 
-    <form action="salvar_conta.php" method="POST">
+    <form action="salvar_conta.php" method="POST" id="formLancamento">
         <div class="mb-4">
             <div class="btn-group w-100 p-1 bg-white border rounded-4 shadow-sm" role="group">
                 <input type="radio" class="btn-check" name="contatipo" id="entrada" value="Entrada" <?= $tipo_pre == 'Entrada' ? 'checked' : '' ?>>
@@ -38,7 +36,8 @@ $categorias = $stmt_cat->fetchAll();
             <span class="form-label-caps">VALOR DO LANÇAMENTO</span>
             <div class="d-flex justify-content-center align-items-baseline">
                 <span class="fs-4 fw-bold text-muted me-2">R$</span>
-                <input type="number" name="contavalor" class="form-control-flush fs-1 fw-bold text-center w-75 bg-transparent border-0" step="0.01" placeholder="0,00" required autofocus>
+                <input type="text" id="valor_display" inputmode="decimal" class="form-control-flush fs-1 fw-bold text-center w-75 bg-transparent border-0" placeholder="0,00" required autofocus>
+                <input type="hidden" name="contavalor" id="valor_real">
             </div>
         </div>
 
@@ -72,7 +71,7 @@ $categorias = $stmt_cat->fetchAll();
                 <div class="col-6">
                     <span class="form-label-caps">PARCELAS</span>
                     <div class="input-group">
-                        <input type="number" name="contaparcela_total" class="form-control bg-light border-0 p-3 text-center" value="1" min="1">
+                        <input type="number" inputmode="numeric" name="contaparcela_total" class="form-control bg-light border-0 p-3 text-center" value="1" min="1">
                         <span class="input-group-text bg-light border-0 small">x</span>
                     </div>
                 </div>
@@ -84,5 +83,38 @@ $categorias = $stmt_cat->fetchAll();
         </button>
     </form>
 </div>
+
+<script>
+    const inputDisplay = document.getElementById('valor_display');
+    const inputReal = document.getElementById('valor_real');
+
+    inputDisplay.addEventListener('input', function(e) {
+        let value = e.target.value;
+
+        // Remove tudo que não for dígito
+        value = value.replace(/\D/g, "");
+
+        // Converte para decimal (centavos)
+        value = (value / 100).toFixed(2) + "";
+
+        // Troca ponto por vírgula para exibição brasileira
+        let display = value.replace(".", ",");
+        
+        // Adiciona separador de milhar
+        display = display.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+
+        e.target.value = display;
+        
+        // Atualiza o input oculto com o valor formatado para o banco de dados (ex: 1250.50)
+        inputReal.value = value;
+    });
+
+    // Antes de enviar, garante que o valor_real esteja preenchido se o usuário não digitou nada
+    document.getElementById('formLancamento').addEventListener('submit', function() {
+        if (!inputReal.value) {
+            inputReal.value = "0.00";
+        }
+    });
+</script>
 
 <?php require_once "../includes/footer.php"; ?>
