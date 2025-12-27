@@ -28,9 +28,7 @@
         <a href="perfil.php" class="fab-item" data-label="Meu Perfil">
             <i class="bi bi-person-gear" style="color: #f59e0b;"></i>
         </a>
-        <a href="logout.php" class="fab-item" data-label="Sair">
-            <i class="bi bi-box-arrow-right text-danger"></i>
-        </a>
+       
     </div>
 </div>
 
