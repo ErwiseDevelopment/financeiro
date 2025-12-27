@@ -5,52 +5,60 @@ session_start();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $uid = $_SESSION['usuarioid'];
     $tipo = $_POST['contatipo'];
-    $valor = $_POST['contavalor']; // Recebe o valor limpo (ex: 1250.50) do campo hidden
+    $valor_total = (float)$_POST['contavalor']; // Ex: 1000.00
     $descricao = $_POST['contadescricao'];
     $categoriaid = $_POST['categoriaid'];
-    $data_vencimento_original = $_POST['contavencimento'];
+    $data_compra = $_POST['contavencimento'];
     $parcelas_total = (int)$_POST['contaparcela_total'];
-    $situacao = "Pendente"; // Todo lançamento novo nasce pendente
+    $cartoid = !empty($_POST['cartoid']) ? $_POST['cartoid'] : null;
+
+    // Cálculo do valor por parcela
+    $valor_parcela = $valor_total / $parcelas_total;
+
+    // Se for cartão, precisamos saber o dia de fechamento
+    $dia_fechamento = 0;
+    if ($cartoid) {
+        $st = $pdo->prepare("SELECT cartofechamento FROM cartoes WHERE cartoid = ?");
+        $st->execute([$cartoid]);
+        $dia_fechamento = (int)$st->fetchColumn();
+    }
 
     try {
         $pdo->beginTransaction();
 
         for ($i = 1; $i <= $parcelas_total; $i++) {
-            // Calcula a data de vencimento para a parcela atual
-            // P1 = Data Original, P2 = +1 mês, etc.
-            $meses_adicionar = $i - 1;
-            $data_vencimento = date('Y-m-d', strtotime("+$meses_adicionar month", strtotime($data_vencimento_original)));
+            $meses_a_frente = $i - 1;
+            $data_parcela = new DateTime($data_compra);
+            $data_parcela->modify("+$meses_a_frente month");
             
-            // Define a competência (YYYY-MM) com base no vencimento da parcela
-            $competencia = date('Y-m', strtotime($data_vencimento));
+            $dia_da_compra = (int)$data_parcela->format('d');
+            $competencia_obj = clone $data_parcela;
 
-            // Ajusta a descrição para mostrar a parcela (ex: Internet 1/3)
-            $descricao_parcelada = ($parcelas_total > 1) ? $descricao . " ($i/$parcelas_total)" : $descricao;
+            // Lógica de Fechamento de Fatura
+            if ($cartoid && $dia_da_compra >= $dia_fechamento) {
+                $competencia_obj->modify('+1 month');
+            }
 
-            $sql = "INSERT INTO contas (usuarioid, contatipo, contavalor, contadescricao, categoriaid, contavencimento, contacompetencia, contasituacao, contaparcela_num, contaparcela_total) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $competencia = $competencia_obj->format('Y-m');
+            $vencimento_db = $data_parcela->format('Y-m-d');
+            
+            // Texto da descrição para parcelado: "Compra (1/10)"
+            $desc_final = ($parcelas_total > 1) ? $descricao . " ($i/$parcelas_total)" : $descricao;
+
+            $sql = "INSERT INTO contas (usuarioid, contatipo, contavalor, contadescricao, categoriaid, contavencimento, contacompetencia, contasituacao, contaparcela_num, contaparcela_total, cartoid) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)";
             
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
-                $uid, 
-                $tipo, 
-                $valor, 
-                $descricao_parcelada, 
-                $categoriaid, 
-                $data_vencimento, 
-                $competencia, 
-                $situacao,
-                $i, // Número da parcela atual
-                $parcelas_total // Total de parcelas
+                $uid, $tipo, $valor_parcela, $desc_final, $categoriaid, 
+                $vencimento_db, $competencia, $i, $parcelas_total, $cartoid
             ]);
         }
 
         $pdo->commit();
         header("Location: index.php?msg=sucesso");
-        exit();
-
     } catch (Exception $e) {
         $pdo->rollBack();
-        echo "Erro ao salvar: " . $e->getMessage();
+        die("Erro ao salvar: " . $e->getMessage());
     }
 }

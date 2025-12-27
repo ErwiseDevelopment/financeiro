@@ -38,16 +38,30 @@ $stmt_entradas = $pdo->prepare("SELECT c.*, cat.categoriadescricao
 $stmt_entradas->execute([$uid, $mes_filtro]);
 $entradas = $stmt_entradas->fetchAll();
 
-// 2. Busca Saídas
+// 2. Busca Saídas Diretas (Dinheiro/Débito - SEM CARTÃO)
 $stmt_saidas = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
     FROM contas c 
     LEFT JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-    WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída'
+    WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída' AND c.cartoid IS NULL
     ORDER BY c.contavencimento ASC");
 $stmt_saidas->execute([$uid, $mes_filtro]);
 $saidas = $stmt_saidas->fetchAll();
 
-// Formatação do Título
+// 3. Busca Faturas do Mês (VALOR CONSOLIDADO POR CARTÃO)
+$stmt_faturas = $pdo->prepare("SELECT car.cartonome, SUM(c.contavalor) as total_fatura, car.cartoid
+    FROM contas c
+    JOIN cartoes car ON c.cartoid = car.cartoid
+    WHERE c.usuarioid = ? AND c.contacompetencia = ?
+    GROUP BY car.cartoid");
+$stmt_faturas->execute([$uid, $mes_filtro]);
+$faturas_mes = $stmt_faturas->fetchAll();
+
+// Cálculos Totais
+$total_entradas = array_sum(array_column($entradas, 'contavalor'));
+$total_saidas_diretas = array_sum(array_column($saidas, 'contavalor'));
+$total_faturas = array_sum(array_column($faturas_mes, 'total_fatura'));
+$total_geral_saidas = $total_saidas_diretas + $total_faturas;
+
 $fmt_mes = new IntlDateFormatter('pt_BR', IntlDateFormatter::NONE, IntlDateFormatter::NONE, null, null, 'MMMM yyyy');
 $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
 ?>
@@ -58,6 +72,7 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
     .list-group-item:hover { background-color: #fcfcfc; }
     .btn-action { font-size: 0.7rem; font-weight: 800; letter-spacing: 0.5px; border-radius: 10px; padding: 5px 12px; }
     .text-decoration-line-through { opacity: 0.5; }
+    .fatura-highlight { background-color: #fefaff; border-left: 4px solid #6f42c1 !important; }
 </style>
 
 <div class="container py-4">
@@ -66,7 +81,7 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
             <a href="index.php" class="text-dark fs-4 me-3"><i class="bi bi-chevron-left"></i></a>
             <div>
                 <h5 class="fw-bold mb-0 text-capitalize"><?= $titulo_mes ?></h5>
-                <p class="text-muted small mb-0">Controle Bilateral de Fluxo</p>
+                <p class="text-muted small mb-0">Controle de Fluxo Consolidado</p>
             </div>
         </div>
         
@@ -75,7 +90,7 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                 Filtrar Mês
             </button>
             <ul class="dropdown-menu shadow-lg border-0 rounded-3">
-                <?php for($i = -3; $i <= 3; $i++): 
+                <?php for($i = -3; $i <= 6; $i++): 
                     $m = date('Y-m', strtotime("+$i month", strtotime(date('Y-m-01'))));
                 ?>
                 <li><a class="dropdown-item" href="?mes=<?= $m ?>"><?= date('m/Y', strtotime($m)) ?></a></li>
@@ -90,7 +105,7 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
         <div class="col-md-6">
             <div class="d-flex justify-content-between align-items-center mb-3 px-2">
                 <span class="small fw-bold text-success"><i class="bi bi-plus-circle-fill me-1"></i> RECEITAS</span>
-                <span class="fw-bold text-success">R$ <?= number_format(array_sum(array_column($entradas, 'contavalor')), 2, ',', '.') ?></span>
+                <span class="fw-bold text-success">R$ <?= number_format($total_entradas, 2, ',', '.') ?></span>
             </div>
             
             <div class="card-bilateral border">
@@ -111,12 +126,8 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                                    class="btn btn-action <?= $e['contasituacao'] == 'Pendente' ? 'btn-success' : 'btn-light border' ?>">
                                    <?= $e['contasituacao'] == 'Pendente' ? 'RECEBER' : 'ESTORNAR' ?>
                                 </a>
-                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($e) ?>)'>
-                                    EDITAR
-                                </button>
-                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $e['contasid'] ?>)">
-                                    EXCLUIR
-                                </button>
+                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($e) ?>)'>EDITAR</button>
+                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $e['contasid'] ?>)">EXCLUIR</button>
                             </div>
                         </div>
                     <?php endforeach; endif; ?>
@@ -126,13 +137,34 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
 
         <div class="col-md-6">
             <div class="d-flex justify-content-between align-items-center mb-3 px-2">
-                <span class="small fw-bold text-danger"><i class="bi bi-dash-circle-fill me-1"></i> DESPESAS</span>
-                <span class="fw-bold text-danger">R$ <?= number_format(array_sum(array_column($saidas, 'contavalor')), 2, ',', '.') ?></span>
+                <span class="small fw-bold text-danger"><i class="bi bi-dash-circle-fill me-1"></i> DESPESAS GERAIS</span>
+                <span class="fw-bold text-danger">R$ <?= number_format($total_geral_saidas, 2, ',', '.') ?></span>
             </div>
 
             <div class="card-bilateral border">
                 <div class="list-group list-group-flush">
-                    <?php if(empty($saidas)): ?>
+                    
+                    <?php foreach($faturas_mes as $fat): ?>
+                        <div class="list-group-item fatura-highlight">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div class="d-flex align-items-center">
+                                    <div class="bg-purple text-white p-2 rounded-3 me-3" style="background: #6f42c1;">
+                                        <i class="bi bi-credit-card-2-back text-white"></i>
+                                    </div>
+                                    <div>
+                                        <span class="fw-bold d-block">Fatura <?= htmlspecialchars($fat['cartonome']) ?></span>
+                                        <small class="text-muted" style="font-size: 0.7rem;">Total parcelas do mês</small>
+                                    </div>
+                                </div>
+                                <div class="text-end">
+                                    <span class="fw-bold text-danger d-block">R$ <?= number_format($fat['total_fatura'], 2, ',', '.') ?></span>
+                                    <a href="faturas.php?cartoid=<?= $fat['cartoid'] ?>&mes=<?= $mes_filtro ?>" class="btn btn-sm btn-link text-decoration-none p-0 fw-bold" style="font-size: 0.7rem;">VER ITENS</a>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+
+                    <?php if(empty($saidas) && empty($faturas_mes)): ?>
                         <div class="p-5 text-center text-muted small">Nenhuma despesa registrada.</div>
                     <?php else: foreach($saidas as $s): ?>
                         <div class="list-group-item">
@@ -148,12 +180,8 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                                    class="btn btn-action <?= $s['contasituacao'] == 'Pendente' ? 'btn-danger' : 'btn-light border' ?>">
                                    <?= $s['contasituacao'] == 'Pendente' ? 'PAGAR' : 'ESTORNAR' ?>
                                 </a>
-                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($s) ?>)'>
-                                    EDITAR
-                                </button>
-                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $s['contasid'] ?>)">
-                                    EXCLUIR
-                                </button>
+                                <button type="button" class="btn btn-light border btn-action" onclick='abrirModalEdicao(<?= json_encode($s) ?>)'>EDITAR</button>
+                                <button type="button" class="btn btn-light border btn-action text-danger" onclick="confirmarExclusao(<?= $s['contasid'] ?>)">EXCLUIR</button>
                             </div>
                         </div>
                     <?php endforeach; endif; ?>
@@ -181,10 +209,10 @@ $titulo_mes = $fmt_mes->format(strtotime($mes_filtro."-01"));
                     <div class="row g-3">
                         <div class="col-6">
                             <label class="form-label small fw-bold">Valor (R$)</label>
-                            <input type="decimal" inputmode="decimal" step="0.01" name="valor" id="edit_valor" class="form-control rounded-3 border-light bg-light py-2" required>
+                            <input type="number" step="0.01" name="valor" id="edit_valor" class="form-control rounded-3 border-light bg-light py-2" required>
                         </div>
                         <div class="col-6">
-                            <label class="form-label small fw-bold">Vencimento</label>
+                            <label class="form-label small fw-bold">Data Vencimento</label>
                             <input type="date" name="vencimento" id="edit_vencimento" class="form-control rounded-3 border-light bg-light py-2" required>
                         </div>
                     </div>
