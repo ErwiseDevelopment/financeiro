@@ -4,59 +4,59 @@ session_start();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $uid = $_SESSION['usuarioid'];
-    $tipo = $_POST['contatipo'];
-    $valor_total = (float)$_POST['contavalor']; // Ex: 1000.00
-    $descricao = $_POST['contadescricao'];
+    $contadescricao = $_POST['contadescricao'];
+    $contavalor = $_POST['contavalor'];
+    $contatipo = $_POST['contatipo'];
     $categoriaid = $_POST['categoriaid'];
-    $data_compra = $_POST['contavencimento'];
-    $parcelas_total = (int)$_POST['contaparcela_total'];
+    $contavencimento = $_POST['contavencimento'];
     $cartoid = !empty($_POST['cartoid']) ? $_POST['cartoid'] : null;
-
-    // Cálculo do valor por parcela
-    $valor_parcela = $valor_total / $parcelas_total;
-
-    // Se for cartão, precisamos saber o dia de fechamento
-    $dia_fechamento = 0;
-    if ($cartoid) {
-        $st = $pdo->prepare("SELECT cartofechamento FROM cartoes WHERE cartoid = ?");
-        $st->execute([$cartoid]);
-        $dia_fechamento = (int)$st->fetchColumn();
-    }
+    $contafixa = isset($_POST['contafixa']) ? 1 : 0; // Captura o novo campo
+    $parcelas_total = (int)$_POST['contaparcela_total'];
 
     try {
         $pdo->beginTransaction();
 
         for ($i = 1; $i <= $parcelas_total; $i++) {
-            $meses_a_frente = $i - 1;
-            $data_parcela = new DateTime($data_compra);
-            $data_parcela->modify("+$meses_a_frente month");
-            
-            $dia_da_compra = (int)$data_parcela->format('d');
-            $competencia_obj = clone $data_parcela;
-
-            // Lógica de Fechamento de Fatura
-            if ($cartoid && $dia_da_compra >= $dia_fechamento) {
-                $competencia_obj->modify('+1 month');
+            // Calcula a data de vencimento e a competência para cada parcela
+            $data = new DateTime($contavencimento);
+            if ($i > 1) {
+                $data->modify('+' . ($i - 1) . ' month');
             }
-
-            $competencia = $competencia_obj->format('Y-m');
-            $vencimento_db = $data_parcela->format('Y-m-d');
             
-            // Texto da descrição para parcelado: "Compra (1/10)"
-            $desc_final = ($parcelas_total > 1) ? $descricao . " ($i/$parcelas_total)" : $descricao;
-
-            $sql = "INSERT INTO contas (usuarioid, contatipo, contavalor, contadescricao, categoriaid, contavencimento, contacompetencia, contasituacao, contaparcela_num, contaparcela_total, cartoid) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendente', ?, ?, ?)";
+            $vencimento_parcela = $data->format('Y-m-d');
+            $competencia = $data->format('Y-m');
             
+            // Se for parcelado, ajusta a descrição para "Nome da Conta (1/12)"
+            $desc_final = ($parcelas_total > 1) ? $contadescricao . " ($i/$parcelas_total)" : $contadescricao;
+
+            $sql = "INSERT INTO contas (
+                usuarioid, categoriaid, contadescricao, contavalor, 
+                contavencimento, contacompetencia, contatipo, 
+                contafixa, cartoid, contaparcela_num, contaparcela_total, contasituacao
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendente')";
+
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
-                $uid, $tipo, $valor_parcela, $desc_final, $categoriaid, 
-                $vencimento_db, $competencia, $i, $parcelas_total, $cartoid
+                $uid,
+                $categoriaid,
+                $desc_final,
+                $contavalor,
+                $vencimento_parcela,
+                $competencia,
+                $contatipo,
+                $contafixa,
+                $cartoid,
+                $i,
+                $parcelas_total
             ]);
         }
 
         $pdo->commit();
-        header("Location: index.php?msg=sucesso");
+        
+        // Redireciona para o mês da primeira parcela
+        $mes_inicial = date('Y-m', strtotime($contavencimento));
+        header("Location: index.php?mes=$mes_inicial&msg=Lançamento realizado com sucesso!");
+        
     } catch (Exception $e) {
         $pdo->rollBack();
         die("Erro ao salvar: " . $e->getMessage());

@@ -14,6 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($stmt->execute([$uid, $nome, $fechamento, $vencimento, $limite])) {
         header("Location: dashboard.php?msg=cartao_sucesso");
+        exit;
     } else {
         echo "Erro ao cadastrar cartão.";
     }

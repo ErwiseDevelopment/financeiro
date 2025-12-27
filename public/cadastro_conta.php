@@ -16,6 +16,15 @@ $stmt_cartoes->execute([$uid]);
 $cartoes = $stmt_cartoes->fetchAll();
 ?>
 
+<style>
+    .form-label-caps { font-size: 0.65rem; font-weight: 800; color: #94a3b8; letter-spacing: 1px; display: block; margin-bottom: 8px; }
+    .btn-type-select { border: 2px solid transparent; background: #f1f5f9; color: #64748b; transition: 0.3s; }
+    .btn-check:checked + .btn-type-select { background: #fff; border-color: var(--bs-primary); color: var(--bs-primary); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .form-control-flush:focus { outline: none; }
+    .switch-fixa-container { cursor: pointer; transition: 0.2s; border: 1px solid transparent; }
+    .switch-fixa-container:hover { border-color: #e2e8f0; }
+</style>
+
 <div class="container py-4">
     <div class="d-flex justify-content-between align-items-center mb-4 px-1">
         <a href="index.php" class="text-dark fs-4 text-decoration-none"><i class="bi bi-chevron-left"></i></a>
@@ -83,9 +92,16 @@ $cartoes = $stmt_cartoes->fetchAll();
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <small class="text-muted mt-1 d-block" style="font-size: 0.7rem;">
-                    *Se selecionado, o vencimento será calculado pela fatura.
-                </small>
+            </div>
+
+            <div class="mb-4 p-3 rounded-4 bg-light d-flex justify-content-between align-items-center switch-fixa-container" onclick="document.getElementById('checkFixa').click();">
+                <div>
+                    <span class="fw-bold d-block small">Marcar como Conta Fixa?</span>
+                    <small class="text-muted" style="font-size: 0.65rem;">Ela aparecerá pronta para copiar no próximo mês.</small>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input fs-4" type="checkbox" name="contafixa" value="1" id="checkFixa" onclick="event.stopPropagation();">
+                </div>
             </div>
 
             <div class="row g-3">
@@ -108,6 +124,7 @@ $cartoes = $stmt_cartoes->fetchAll();
         </button>
     </form>
 </div>
+
 <div class="modal fade" id="modalRapidoCategoria" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered px-4">
         <div class="modal-content rounded-4 border-0 shadow">
@@ -116,10 +133,7 @@ $cartoes = $stmt_cartoes->fetchAll();
                 <button type="button" class="btn-close" data-bs-dismiss="modal" id="closeModalCat"></button>
             </div>
             <div class="modal-body pt-0">
-               <input type="text" id="nome_nova_categoria" 
-       class="form-control bg-light border-0 p-3 mb-3" 
-       placeholder="Nome da categoria (ex: Lazer)"
-       onkeypress="if(event.key === 'Enter') { salvarCategoriaRapida(); event.preventDefault(); }">
+                <input type="text" id="nome_nova_categoria" class="form-control bg-light border-0 p-3 mb-3" placeholder="Nome da categoria (ex: Lazer)" onkeypress="if(event.key === 'Enter') { salvarCategoriaRapida(); event.preventDefault(); }">
                 <button type="button" onclick="salvarCategoriaRapida()" class="btn btn-primary w-100 py-2 rounded-3 fw-bold">
                     Salvar e Selecionar
                 </button>
@@ -127,96 +141,79 @@ $cartoes = $stmt_cartoes->fetchAll();
         </div>
     </div>
 </div>
+
 <script>
     const inputDisplay = document.getElementById('valor_display');
     const inputReal = document.getElementById('valor_real');
     const divCartao = document.getElementById('divCartao');
     const radioEntrada = document.getElementById('entrada');
     const radioSaida = document.getElementById('saida');
+    const inputParcelas = document.querySelector('input[name="contaparcela_total"]');
 
-    // Lógica para esconder/mostrar seleção de cartão
+    // Alternar visibilidade do campo cartão
     radioEntrada.addEventListener('change', () => divCartao.style.display = 'none');
     radioSaida.addEventListener('change', () => divCartao.style.display = 'block');
 
+    // Máscara de Moeda (R$)
     inputDisplay.addEventListener('input', function(e) {
-        let value = e.target.value;
-        value = value.replace(/\D/g, "");
+        let value = e.target.value.replace(/\D/g, "");
         value = (value / 100).toFixed(2) + "";
-        let display = value.replace(".", ",");
-        display = display.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+        let display = value.replace(".", ",").replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
         e.target.value = display;
         inputReal.value = value;
+        atualizarPreviewParcela();
     });
 
-    document.getElementById('formLancamento').addEventListener('submit', function() {
-        if (!inputReal.value) {
-            inputReal.value = "0.00";
-        }
-    });
-
-    const inputParcelas = document.querySelector('input[name="contaparcela_total"]');
-
-function atualizarPreviewParcela() {
-    const total = parseFloat(inputReal.value);
-    const qtd = parseInt(inputParcelas.value);
-    
-    if (qtd > 1 && total > 0) {
-        const valorParcela = (total / qtd).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-        // Opcional: Criar um pequeno elemento de texto abaixo do campo de parcelas
+    // Preview do valor das parcelas
+    function atualizarPreviewParcela() {
+        const total = parseFloat(inputReal.value);
+        const qtd = parseInt(inputParcelas.value);
         let info = document.getElementById('info-parcela');
-        if(!info) {
-            info = document.createElement('small');
-            info.id = 'info-parcela';
-            info.className = 'text-primary fw-bold d-block mt-1';
-            inputParcelas.parentElement.after(info);
-        }
-        info.innerHTML = `${qtd}x de ${valorParcela}`;
-    } else {
-        const info = document.getElementById('info-parcela');
-        if(info) info.remove();
-    }
-}
-
-inputDisplay.addEventListener('input', atualizarPreviewParcela);
-inputParcelas.addEventListener('input', atualizarPreviewParcela);
-function salvarCategoriaRapida() {
-    const nome = document.getElementById('nome_nova_categoria').value;
-    const tipo = document.querySelector('input[name="contatipo"]:checked').value; // Pega se é Entrada ou Saída
-
-    if (!nome) {
-        alert("Digite o nome da categoria");
-        return;
+        
+        if (qtd > 1 && total > 0) {
+            const valorParcela = (total / qtd).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            if(!info) {
+                info = document.createElement('small');
+                info.id = 'info-parcela';
+                info.className = 'text-primary fw-bold d-block mt-1';
+                inputParcelas.parentElement.after(info);
+            }
+            info.innerHTML = `${qtd}x de ${valorParcela}`;
+        } else if(info) info.remove();
     }
 
-    // Criar o FormData para enviar via POST
-    const formData = new FormData();
-    formData.append('categoriadescricao', nome);
-    formData.append('categoriatipo', tipo);
+    inputParcelas.addEventListener('input', atualizarPreviewParcela);
 
-    fetch('ajax_rapido_categoria.php', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            // 1. Adiciona a nova categoria ao Select
-            const select = document.getElementById('selectCategoria');
-            const option = new Option(data.nome, data.id);
-            select.add(option);
-            
-            // 2. Seleciona ela automaticamente
-            select.value = data.id;
+    // Salvar Categoria via AJAX
+    function salvarCategoriaRapida() {
+        const nome = document.getElementById('nome_nova_categoria').value;
+        const tipo = document.querySelector('input[name="contatipo"]:checked').value;
 
-            // 3. Limpa e fecha o modal
-            document.getElementById('nome_nova_categoria').value = "";
-            document.getElementById('closeModalCat').click();
-        } else {
-            alert("Erro ao salvar: " + data.message);
-        }
-    })
-    .catch(error => console.error('Erro:', error));
-}
+        if (!nome) { alert("Digite o nome da categoria"); return; }
+
+        const formData = new FormData();
+        formData.append('categoriadescricao', nome);
+        formData.append('categoriatipo', tipo);
+
+        fetch('ajax_rapido_categoria.php', { method: 'POST', body: formData })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const select = document.getElementById('selectCategoria');
+                select.add(new Option(data.nome, data.id));
+                select.value = data.id;
+                document.getElementById('nome_nova_categoria').value = "";
+                document.getElementById('closeModalCat').click();
+            } else {
+                alert("Erro: " + data.message);
+            }
+        });
+    }
+
+    // Fallback para valor zero no submit
+    document.getElementById('formLancamento').addEventListener('submit', function() {
+        if (!inputReal.value) inputReal.value = "0.00";
+    });
 </script>
 
 <?php require_once "../includes/footer.php"; ?>
