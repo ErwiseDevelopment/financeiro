@@ -91,13 +91,7 @@ $contas = $stmt->fetchAll();
 </style>
 
 <div class="container py-4">
-    <header class="d-flex justify-content-between align-items-center mb-4 px-2">
-        <div>
-            <h5 class="fw-bold mb-0">ED <span class="text-primary">Pro</span></h5>
-            <p class="text-muted small mb-0"><?= $data_extenso ?></p>
-        </div>
-        <a href="logout.php" class="btn btn-white shadow-sm rounded-circle"><i class="bi bi-person-circle fs-5"></i></a>
-    </header>
+  
 
     <div class="card-balance mb-4">
         <div class="d-flex justify-content-between align-items-end mb-2">
