@@ -51,12 +51,42 @@ if ($cartao_selecionado) {
     .chip-cartao.active { background: #212529; color: #fff; border-color: #212529; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     .form-label-caps { font-size: 0.65rem; font-weight: 800; color: #a0aec0; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 5px; display: block; }
     
-    /* Estilo para o navegador de meses */
     .month-nav { background: #fff; border-radius: 15px; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #eee; }
     .month-nav a { color: #212529; text-decoration: none; font-weight: bold; padding: 5px 10px; border-radius: 8px; transition: 0.2s; }
     .month-nav a:hover { background: #f8f9fa; }
     .btn-delete { color: #ff4d4d; opacity: 0.3; transition: 0.2s; cursor: pointer; border: none; background: none; padding: 5px; }
     .card:hover .btn-delete { opacity: 1; }
+
+    /* Estilo para os novos botões de relatório */
+    .btn-view-report {
+        background: #fff;
+        border: 1px solid #edf2f7;
+        border-radius: 18px;
+        padding: 15px;
+        text-decoration: none;
+        color: #2d3748;
+        display: flex;
+        align-items: center;
+        transition: 0.2s;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        height: 100%;
+    }
+    .btn-view-report:hover {
+        background: #f8fafc;
+        transform: translateY(-2px);
+        color: #212529;
+    }
+    .btn-view-report i {
+        font-size: 1.3rem;
+        margin-right: 12px;
+        color: #212529;
+    }
+    .btn-view-report span {
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1.2;
+        text-transform: uppercase;
+    }
 </style>
 
 <div class="container py-4 mb-5">
@@ -72,6 +102,21 @@ if ($cartao_selecionado) {
         </div>
     </div>
 
+     <div class="row g-2 mb-4">
+            <div class="col-6">
+                <a href="resumo_cartoes.php" class="btn-view-report">
+                    <i class="bi bi-pie-chart-fill"></i>
+                    <span>Resumo por<br>Cartão</span>
+                </a>
+            </div>
+            <div class="col-6">
+                <a href="faturas_geral.php" class="btn-view-report">
+                    <i class="bi bi-list-check"></i>
+                    <span>Todas as<br>Faturas</span>
+                </a>
+            </div>
+        </div>
+
     <div class="d-flex overflow-x-auto gap-2 mb-4 pb-2" style="scrollbar-width: none;">
         <?php foreach($meus_cartoes as $ct): ?>
             <a href="?cartoid=<?= $ct['cartoid'] ?>&mes=<?= $mes_filtro ?>" 
@@ -83,7 +128,7 @@ if ($cartao_selecionado) {
     </div>
 
     <?php if($cartao_selecionado): ?>
-        <div class="card-fatura shadow-sm mb-4">
+        <div class="card-fatura shadow-sm mb-3">
             <div class="card-fatura-header">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span class="text-uppercase small opacity-75 fw-bold">Total da Fatura</span>
@@ -127,7 +172,9 @@ if ($cartao_selecionado) {
             </div>
         </div>
 
-        <h6 class="fw-bold mb-3 px-1 mt-4">Lançamentos no Cartão</h6>
+       
+        <h6 class="fw-bold mb-3 px-1">Lançamentos no Cartão</h6>
+        
         <?php if(empty($itens_fatura)): ?>
             <div class="p-5 text-center text-muted bg-white rounded-4 border border-dashed small shadow-sm">
                 <i class="bi bi-emoji-smile d-block fs-2 mb-2"></i>
@@ -153,9 +200,9 @@ if ($cartao_selecionado) {
                             <small class="badge bg-light text-dark fw-normal" style="font-size: 0.55rem;">P: <?= $it['contaparcela_num'] ?>/<?= $it['contaparcela_total'] ?></small>
                         <?php endif; ?>
                     </div>
-<button onclick="confirmarExclusao(<?= $it['contasid'] ?>, <?= $it['contaparcela_total'] > 1 ? 'true' : 'false' ?>)" class="btn-delete">
-    <i class="bi bi-trash3"></i>
-</button>
+                    <button onclick="confirmarExclusao(<?= $it['contasid'] ?>, <?= $it['contaparcela_total'] > 1 ? 'true' : 'false' ?>)" class="btn-delete">
+                        <i class="bi bi-trash3"></i>
+                    </button>
                 </div>
             </div>
         <?php endforeach; endif; ?>
