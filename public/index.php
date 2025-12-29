@@ -19,6 +19,16 @@ $stmt_alerta = $pdo->prepare("SELECT c.*, cat.categoriadescricao
 $stmt_alerta->execute([$uid, $tres_dias_depois]);
 $alertas = $stmt_alerta->fetchAll();
 
+// --- NOVO: CÁLCULO DO SALDO ACUMULADO (MESES ANTERIORES) ---
+// Soma tudo que entrou e saiu (PAGO) antes do mês atual selecionado
+$stmt_anterior = $pdo->prepare("SELECT 
+    SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) -
+    SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as saldo_acumulado
+    FROM contas 
+    WHERE usuarioid = ? AND contacompetencia < ?");
+$stmt_anterior->execute([$uid, $mes_filtro]);
+$saldo_anterior = $stmt_anterior->fetch()['saldo_acumulado'] ?? 0;
+
 // 2. RESUMO DO MÊS DETALHADO (Dinheiro vs Cartão)
 $sql = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as entradas,
@@ -32,12 +42,10 @@ $sql->execute([$uid, $mes_filtro]);
 $resumo = $sql->fetch();
 
 // 3. ESTRATÉGIA DE DÍVIDAS E LIMITE DE CARTÃO
-// Soma do limite de todos os cartões cadastrados
 $sql_limite = $pdo->prepare("SELECT SUM(cartolimite) as limite_total FROM cartoes WHERE usuarioid = ?");
 $sql_limite->execute([$uid]);
 $limite_geral = $sql_limite->fetch()['limite_total'] ?? 0;
 
-// Soma de tudo que está pendente no sistema (Dívida Acumulada)
 $sql_dividas = $pdo->prepare("SELECT SUM(contavalor) as total_pendente FROM contas WHERE usuarioid = ? AND contasituacao = 'Pendente' AND contatipo = 'Saída'");
 $sql_dividas->execute([$uid]);
 $total_pendente_geral = $sql_dividas->fetch()['total_pendente'] ?? 0;
@@ -47,7 +55,10 @@ $tot_saidas = $resumo['saidas'] ?? 0;
 $total_cartao = $resumo['total_cartao'] ?? 0;
 $total_fixo_dinheiro = $resumo['total_fixo_dinheiro'] ?? 0;
 
-$saldo_real = ($resumo['entradas_pagas'] ?? 0) - ($resumo['saidas_pagas'] ?? 0);
+// CÁLCULO FINAL DO SALDO REAL (Anterior + Atual)
+$saldo_mes_atual = ($resumo['entradas_pagas'] ?? 0) - ($resumo['saidas_pagas'] ?? 0);
+$saldo_real = $saldo_anterior + $saldo_mes_atual;
+
 $uso_limite_pct = ($limite_geral > 0) ? ($total_cartao / $limite_geral) * 100 : 0;
 
 // 4. LISTAGEM GERAL
