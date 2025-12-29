@@ -6,6 +6,11 @@ $uid = $_SESSION['usuarioid'];
 $mes_filtro = $_GET['mes'] ?? date('Y-m');
 $cartao_selecionado = $_GET['cartoid'] ?? null;
 
+// Lógica para navegação de meses
+$data_atual = new DateTime($mes_filtro . "-01");
+$mes_anterior = (clone $data_atual)->modify('-1 month')->format('Y-m');
+$mes_proximo = (clone $data_atual)->modify('+1 month')->format('Y-m');
+
 // 1. Busca os cartões do usuário para o seletor
 $stmt_cards = $pdo->prepare("SELECT * FROM cartoes WHERE usuarioid = ?");
 $stmt_cards->execute([$uid]);
@@ -45,12 +50,26 @@ if ($cartao_selecionado) {
     }
     .chip-cartao.active { background: #212529; color: #fff; border-color: #212529; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     .form-label-caps { font-size: 0.65rem; font-weight: 800; color: #a0aec0; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 5px; display: block; }
+    
+    /* Estilo para o navegador de meses */
+    .month-nav { background: #fff; border-radius: 15px; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #eee; }
+    .month-nav a { color: #212529; text-decoration: none; font-weight: bold; padding: 5px 10px; border-radius: 8px; transition: 0.2s; }
+    .month-nav a:hover { background: #f8f9fa; }
+    .btn-delete { color: #ff4d4d; opacity: 0.3; transition: 0.2s; cursor: pointer; border: none; background: none; padding: 5px; }
+    .card:hover .btn-delete { opacity: 1; }
 </style>
 
 <div class="container py-4 mb-5">
-    <div class="mb-4 px-1">
-        <h4 class="fw-bold m-0">Faturas</h4>
-        <small class="text-muted">Gestão de cartões de crédito</small>
+    <div class="d-flex justify-content-between align-items-center mb-4 px-1">
+        <div>
+            <h4 class="fw-bold m-0">Faturas</h4>
+            <small class="text-muted">Gestão de cartões de crédito</small>
+        </div>
+        <div class="month-nav shadow-sm">
+            <a href="?cartoid=<?= $cartao_selecionado ?>&mes=<?= $mes_anterior ?>"><i class="bi bi-chevron-left"></i></a>
+            <span class="mx-3 text-uppercase small fw-bold"><?= ucfirst((new IntlDateFormatter('pt_BR', IntlDateFormatter::NONE, IntlDateFormatter::NONE, null, null, "MMMM yyyy"))->format($data_atual)) ?></span>
+            <a href="?cartoid=<?= $cartao_selecionado ?>&mes=<?= $mes_proximo ?>"><i class="bi bi-chevron-right"></i></a>
+        </div>
     </div>
 
     <div class="d-flex overflow-x-auto gap-2 mb-4 pb-2" style="scrollbar-width: none;">
@@ -104,10 +123,6 @@ if ($cartao_selecionado) {
                     <button class="btn btn-primary w-100 py-3 rounded-4 fw-bold mt-4 shadow" data-bs-toggle="modal" data-bs-target="#modalPagamento">
                         <i class="bi bi-currency-dollar me-2"></i> EFETUAR PAGAMENTO
                     </button>
-                <?php elseif($total_fatura > 0): ?>
-                    <div class="btn btn-outline-success w-100 py-3 rounded-4 fw-bold mt-4 disabled border-2">
-                        <i class="bi bi-check-all me-2"></i> FATURA TOTALMENTE PAGA
-                    </div>
                 <?php endif; ?>
             </div>
         </div>
@@ -131,62 +146,34 @@ if ($cartao_selecionado) {
                         </small>
                     </div>
                 </div>
-                <div class="text-end">
-                    <span class="fw-bold small d-block">R$ <?= number_format($it['contavalor'], 2, ',', '.') ?></span>
-                    <?php if($it['contaparcela_total'] > 1): ?>
-                        <small class="badge bg-light text-dark fw-normal" style="font-size: 0.55rem;">P: <?= $it['contaparcela_num'] ?>/<?= $it['contaparcela_total'] ?></small>
-                    <?php endif; ?>
+                <div class="d-flex align-items-center">
+                    <div class="text-end me-3">
+                        <span class="fw-bold small d-block">R$ <?= number_format($it['contavalor'], 2, ',', '.') ?></span>
+                        <?php if($it['contaparcela_total'] > 1): ?>
+                            <small class="badge bg-light text-dark fw-normal" style="font-size: 0.55rem;">P: <?= $it['contaparcela_num'] ?>/<?= $it['contaparcela_total'] ?></small>
+                        <?php endif; ?>
+                    </div>
+<button onclick="confirmarExclusao(<?= $it['contasid'] ?>, <?= $it['contaparcela_total'] > 1 ? 'true' : 'false' ?>)" class="btn-delete">
+    <i class="bi bi-trash3"></i>
+</button>
                 </div>
             </div>
         <?php endforeach; endif; ?>
         
-    <?php else: ?>
-        <div class="text-center py-5">
-            <i class="bi bi-credit-card text-muted display-1"></i>
-            <p class="mt-3 text-muted">Cadastre um cartão para começar.</p>
-            <a href="cadastro_cartao.php" class="btn btn-primary rounded-pill px-4 shadow">Cadastrar Agora</a>
-        </div>
     <?php endif; ?>
 </div>
 
-<div class="modal fade" id="modalPagamento" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered px-3">
-        <div class="modal-content rounded-4 border-0 shadow-lg">
-            <div class="modal-header border-0 pb-0">
-                <h5 class="fw-bold">Pagamento de Fatura</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form action="processa_pagamento_fatura.php" method="POST">
-                <div class="modal-body p-4">
-                    <input type="hidden" name="cartoid" value="<?= $cartao_selecionado ?>">
-                    <input type="hidden" name="mes_fatura" value="<?= $mes_filtro ?>">
-                    <input type="hidden" name="total_fatura" value="<?= $total_fatura ?>">
-
-                    <div class="bg-light rounded-4 p-3 text-center mb-4">
-                        <span class="form-label-caps mb-0">Valor Total Devido</span>
-                        <h3 class="fw-bold text-dark mb-0">R$ <?= number_format($total_fatura, 2, ',', '.') ?></h3>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label-caps">VALOR A PAGAR</label>
-                        <div class="input-group">
-                            <span class="input-group-text border-0 bg-white fs-5 fw-bold">R$</span>
-                            <input type="number" step="0.01" name="valor_pagamento" class="form-control form-control-lg border-0 bg-white fs-3 fw-bold ps-0" value="<?= $total_fatura ?>" required>
-                        </div>
-                        <hr class="mt-0">
-                        <div class="alert alert-info border-0 rounded-3 py-2" style="font-size: 0.75rem;">
-                            <i class="bi bi-info-circle-fill me-1"></i>
-                            Se você pagar um valor <strong>menor</strong> que o total, o restante será lançado automaticamente como saldo devedor na fatura do próximo mês.
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer border-0 pt-0">
-                    <button type="submit" class="btn btn-primary w-100 py-3 rounded-4 fw-bold shadow">CONFIRMAR PAGAMENTO</button>
-                    <button type="button" class="btn btn-link w-100 text-muted text-decoration-none btn-sm" data-bs-dismiss="modal">Cancelar</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
+<script>
+function confirmarExclusao(id, eParcelado) {
+    let msg = "Tem certeza que deseja excluir este lançamento?";
+    if (eParcelado) {
+        msg = "Este item faz parte de um parcelamento. Ao excluir, TODAS as parcelas desta compra serão removidas. Confirmar?";
+    }
+    
+    if (confirm(msg)) {
+        window.location.href = "acoes_conta.php?id=" + id + "&acao=excluir";
+    }
+}
+</script>
 
 <?php require_once "../includes/footer.php"; ?>

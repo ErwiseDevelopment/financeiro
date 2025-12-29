@@ -10,15 +10,20 @@ $tres_dias_depois = date('Y-m-d', strtotime('+3 days'));
 $fmt = new IntlDateFormatter('pt_BR', IntlDateFormatter::LONG, IntlDateFormatter::NONE);
 $data_extenso = $fmt->format(new DateTime()); 
 
-// 1. ALERTAS (Saídas Pendentes Atrasadas ou Próximas)
+// 1. ALERTAS (Apenas contas que NÃO são de cartão)
+// Corrigido: Usando 'IS NULL' para cartoid e garantindo que apenas Saídas Pendentes apareçam
 $stmt_alerta = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
     FROM contas c 
     JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-    WHERE c.usuarioid = ? AND c.contasituacao = 'Pendente' AND c.contatipo = 'Saída'
-    AND c.contavencimento <= ? ORDER BY c.contavencimento ASC");
+    WHERE c.usuarioid = ? 
+    AND c.contasituacao = 'Pendente' 
+    AND c.contatipo = 'Saída' 
+    AND c.cartoid IS NULL 
+    AND c.contavencimento <= ? 
+    ORDER BY c.contavencimento ASC");
+
 $stmt_alerta->execute([$uid, $tres_dias_depois]);
 $alertas = $stmt_alerta->fetchAll();
-
 // --- NOVO: CÁLCULO DO SALDO ACUMULADO (MESES ANTERIORES) ---
 // Soma tudo que entrou e saiu (PAGO) antes do mês atual selecionado
 $stmt_anterior = $pdo->prepare("SELECT 
