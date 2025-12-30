@@ -38,31 +38,27 @@ if ($cartao_selecionado) {
 
     // 2. Preparamos as datas para o filtro
     // $mes_filtro vem da URL (ex: 2026-01)
-    $data_alvo = new DateTime($mes_filtro . "-01");
-    $mes_atual = $data_alvo->format('Y-m');
-    $mes_anterior = (clone $data_alvo)->modify('-1 month')->format('Y-m');
+    // No faturas.php, substitua a query principal por esta:
+$data_alvo = new DateTime($mes_filtro . "-01");
+$mes_atual_txt = $data_alvo->format('Y-m');
+$mes_anterior_txt = (clone $data_alvo)->modify('-1 month')->format('Y-m');
 
-    // 3. A Query Mágica:
-    // Buscamos o que foi gasto no mês anterior (Dez) que cai nesta fatura
-    // E o que foi gasto no mês atual (Jan) antes de fechar a próxima
-    $sql_fatura = "SELECT c.*, cat.categoriadescricao 
-        FROM contas c 
-        JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-        WHERE c.usuarioid = ? AND c.cartoid = ? 
-        AND (
-            (c.contacompetencia = ? AND DAY(c.contavencimento) <= ?) 
-            OR 
-            (c.contacompetencia = ? AND DAY(c.contavencimento) > ?)
-        )
-        ORDER BY c.contavencimento ASC";
+$sql_fatura = "SELECT c.*, cat.categoriadescricao 
+    FROM contas c 
+    JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+    JOIN cartoes car ON c.cartoid = car.cartoid
+    WHERE c.usuarioid = ? AND c.cartoid = ? 
+    AND (
+        -- Regra A: Gastos do mês anterior feitos APÓS o fechamento
+        (c.contacompetencia = ? AND DAY(c.contavencimento) >= car.cartofechamento)
+        OR 
+        -- Regra B: Gastos do mês atual feitos ANTES do fechamento
+        (c.contacompetencia = ? AND DAY(c.contavencimento) < car.cartofechamento)
+    )
+    ORDER BY c.contavencimento ASC";
 
-    $stmt_f = $pdo->prepare($sql_fatura);
-    $stmt_f->execute([
-        $uid, 
-        $cartao_selecionado, 
-        $mes_anterior, $dia_fechamento, // Parte 1: Compras de Dezembro até o dia 30
-        $mes_anterior, $dia_fechamento  // Parte 2: (Opcional) Ajuste conforme sua virada
-    ]);
+$stmt_f = $pdo->prepare($sql_fatura);
+$stmt_f->execute([$uid, $cartao_selecionado, $mes_anterior_txt, $mes_atual_txt]);
     
     // NOTA: Para o seu caso específico (Compra dia 25, Fechamento dia 30, Ver em Janeiro):
     // A query abaixo é a mais simplificada para o seu modelo de competência atual:
