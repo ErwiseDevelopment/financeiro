@@ -3,42 +3,30 @@ require_once "../config/database.php";
 require_once "../includes/header.php";
 
 $uid = $_SESSION['usuarioid'];
-
-// Datas padrão
 $mes_inicio_default = date('Y-m', strtotime('-5 months'));
 $mes_fim_default = date('Y-m');
 
-// Lista de Categorias
-$stmt = $pdo->prepare("SELECT categoriaid, categoriadescricao FROM categorias WHERE usuarioid = ? AND (categoriatipo = 'Despesa') ORDER BY categoriadescricao ASC");
+$stmt = $pdo->prepare("SELECT categoriaid, categoriadescricao FROM categorias WHERE usuarioid = ? AND (categoriatipo = 'Despesa' OR categoriatipo = 'Saída') ORDER BY categoriadescricao ASC");
 $stmt->execute([$uid]);
 $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <style>
     body { background-color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif; color: #1e293b; }
-    
     .app-container { max-width: 1100px; margin: 0 auto; padding: 30px 20px; }
-    
-    /* Cards */
-    .card-app { background: #fff; border-radius: 20px; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04); height: 100%; transition: transform 0.2s; }
-    .card-app:hover { transform: translateY(-2px); }
-    
-    /* Inputs */
+    .card-app { background: #fff; border-radius: 20px; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.04); height: 100%; }
     .label-app { font-size: 0.7rem; font-weight: 800; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
     .input-app { background-color: #f8fafc; border: 2px solid #e2e8f0; padding: 10px 15px; border-radius: 12px; font-weight: 600; color: #334155; width: 100%; transition: 0.2s; }
     .input-app:focus { outline: none; background-color: #fff; border-color: #4361ee; }
-
-    /* KPIs */
     .kpi-value { font-size: 1.5rem; font-weight: 800; color: #1e293b; line-height: 1; }
     .kpi-label { font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 5px; }
     .icon-kpi { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; margin-bottom: 10px; }
-
-    /* Overlay */
+    .progress-thick { height: 12px; border-radius: 10px; background: #e2e8f0; overflow: hidden; margin-top: 10px; }
+    .meta-info { font-size: 0.85rem; font-weight: 600; color: #64748b; }
     .chart-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.9); display: none; justify-content: center; align-items: center; flex-direction: column; z-index: 10; border-radius: 14px; }
 </style>
 
 <div class="app-container">
-    
     <div class="d-flex justify-content-between align-items-center mb-5">
         <div>
             <a href="index.php" class="text-decoration-none text-muted fw-bold small mb-2 d-inline-block"><i class="bi bi-arrow-left"></i> Voltar</a>
@@ -47,16 +35,13 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
     <?php if (empty($todas_categorias)): ?>
-        <div class="text-center py-5">
-            <i class="bi bi-inbox fs-1 text-muted opacity-25"></i>
-            <p class="mt-3 text-muted">Cadastre categorias de despesa para começar.</p>
-        </div>
+        <div class="text-center py-5"><p class="text-muted">Cadastre categorias de despesa para começar.</p></div>
     <?php else: ?>
 
         <div class="card-app mb-4 bg-white">
             <div class="row g-3 align-items-end">
                 <div class="col-md-4">
-                    <label class="label-app">Categoria Analisada</label>
+                    <label class="label-app">Categoria</label>
                     <select id="selectCategoria" class="input-app" onchange="carregarDados()">
                         <?php foreach($todas_categorias as $cat): ?>
                             <option value="<?= $cat['categoriaid'] ?>"><?= $cat['categoriadescricao'] ?></option>
@@ -72,10 +57,22 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <input type="month" id="evoFim" class="input-app" value="<?= $mes_fim_default ?>" onchange="carregarDados()">
                 </div>
                 <div class="col-md-2">
-                    <button onclick="carregarDados()" class="btn btn-dark w-100 fw-bold py-2" style="border-radius: 12px; height: 45px;">
-                        <i class="bi bi-arrow-clockwise"></i>
-                    </button>
+                    <button onclick="carregarDados()" class="btn btn-dark w-100 fw-bold py-2" style="border-radius: 12px; height: 45px;"><i class="bi bi-arrow-clockwise"></i></button>
                 </div>
+            </div>
+        </div>
+
+        <div id="boxMeta" class="card-app mb-4 bg-light border-0 d-none">
+            <div class="d-flex justify-content-between align-items-end mb-2">
+                <h6 class="fw-bold m-0 text-dark"><i class="bi bi-bullseye me-2 text-danger"></i>Meta Acumulada</h6>
+                <span class="meta-info" id="txtMetaStatus">...</span>
+            </div>
+            <div class="progress progress-thick">
+                <div id="barMeta" class="progress-bar" role="progressbar" style="width: 0%; transition: 1s;"></div>
+            </div>
+            <div class="d-flex justify-content-between mt-2 small text-muted">
+                <span>Gasto Total: <strong id="txtMetaGasto" class="text-dark">R$ 0,00</strong></span>
+                <span>Meta Total: <strong id="txtMetaTotal">R$ 0,00</strong></span>
             </div>
         </div>
 
@@ -104,7 +101,9 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
         </div>
 
         <div class="card-app mb-4 position-relative">
-            <h6 class="fw-bold text-dark mb-4 ms-1"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Evolução Mensal</h6>
+            <div class="d-flex align-items-center mb-4">
+                <h6 class="fw-bold text-dark m-0"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Histórico: Gasto vs Meta</h6>
+            </div>
             <div style="height: 300px;">
                 <canvas id="chartEvolucao"></canvas>
             </div>
@@ -114,18 +113,14 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="row g-4">
             <div class="col-md-6">
                 <div class="card-app position-relative">
-                    <h6 class="fw-bold text-dark mb-4 ms-1"><i class="bi bi-calendar-day me-2 text-primary"></i>Gastos por Dia da Semana</h6>
-                    <div style="height: 250px;">
-                        <canvas id="chartSemana"></canvas>
-                    </div>
+                    <h6 class="fw-bold text-dark mb-4 ms-1">Dias da Semana</h6>
+                    <div style="height: 250px;"><canvas id="chartSemana"></canvas></div>
                 </div>
             </div>
             <div class="col-md-6">
                 <div class="card-app position-relative">
-                    <h6 class="fw-bold text-dark mb-4 ms-1"><i class="bi bi-pie-chart me-2 text-primary"></i>Concentração no Mês</h6>
-                    <div style="height: 250px;">
-                        <canvas id="chartMesSemana"></canvas>
-                    </div>
+                    <h6 class="fw-bold text-dark mb-4 ms-1">Momentos do Mês</h6>
+                    <div style="height: 250px;"><canvas id="chartMesSemana"></canvas></div>
                 </div>
             </div>
         </div>
@@ -137,20 +132,16 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <script>
 <?php if (!empty($todas_categorias)): ?>
 
-    // Instâncias Globais dos Gráficos
-    let chartEv = null;
-    let chartDay = null;
-    let chartWeek = null;
+    let chartEv = null, chartDay = null, chartWeek = null;
 
     function carregarDados() {
         const catId = document.getElementById('selectCategoria').value;
         const ini = document.getElementById('evoInicio').value;
         const fim = document.getElementById('evoFim').value;
-
         if(!catId || !ini || !fim) return;
 
-        // UI Loading
         document.getElementById('loaderMain').style.display = 'flex';
+        // Feedback visual
         document.querySelectorAll('.kpi-value').forEach(e => e.style.opacity = 0.5);
 
         const fd = new FormData();
@@ -164,29 +155,45 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
         .then(json => {
             if(json.status !== 'success') throw new Error(json.message);
 
-            // 1. Atualiza KPIs
+            // KPIs e Barra
             document.getElementById('kpiTotal').innerText = "R$ " + json.kpi.total;
             document.getElementById('kpiQtd').innerText = json.kpi.qtd;
             document.getElementById('kpiMedia').innerText = "R$ " + json.kpi.media;
             document.querySelectorAll('.kpi-value').forEach(e => e.style.opacity = 1);
+            
+            atualizarMeta(json.meta, json.kpi.total);
 
-            // 2. Renderiza Gráficos
-            renderEvolucao(json.evolucao.labels, json.evolucao.data);
+            // Gráficos (Passa os arrays de meta e gasto)
+            renderEvolucao(json.evolucao.labels, json.evolucao.gasto, json.evolucao.meta);
             renderDiasSemana(json.semana);
             renderSemanaMes(json.mes_semanas);
-
         })
-        .catch(err => {
-            console.error(err);
-            alert("Erro ao carregar: " + err.message);
-        })
-        .finally(() => {
-            document.getElementById('loaderMain').style.display = 'none';
-        });
+        .catch(err => { console.error(err); alert("Erro: " + err.message); })
+        .finally(() => { document.getElementById('loaderMain').style.display = 'none'; });
     }
 
-    // --- GRÁFICO 1: EVOLUÇÃO (LINHA) ---
-    function renderEvolucao(labels, data) {
+    function atualizarMeta(meta, gastoFormatado) {
+        const box = document.getElementById('boxMeta');
+        const bar = document.getElementById('barMeta');
+        const txtStatus = document.getElementById('txtMetaStatus');
+        
+        if(!meta.tem_meta) { box.classList.add('d-none'); return; }
+        
+        box.classList.remove('d-none');
+        document.getElementById('txtMetaGasto').innerText = "R$ " + gastoFormatado;
+        document.getElementById('txtMetaTotal').innerText = "R$ " + meta.total_periodo;
+        
+        let perc = meta.perc;
+        bar.style.width = Math.min(perc, 100) + "%";
+        bar.className = 'progress-bar ' + (perc > 100 ? 'bg-danger' : (perc > 75 ? 'bg-warning' : 'bg-success'));
+        
+        txtStatus.innerHTML = perc > 100 
+            ? `<span class="text-danger fw-bold">Estourou (${perc.toFixed(0)}%)</span>` 
+            : `<span class="text-success fw-bold">${perc.toFixed(0)}% Utilizado</span>`;
+    }
+
+    // --- GRÁFICO 1: EVOLUÇÃO COM LINHA DE META VERMELHA ---
+    function renderEvolucao(labels, dataGasto, dataMeta) {
         const ctx = document.getElementById('chartEvolucao').getContext('2d');
         if(chartEv) chartEv.destroy();
 
@@ -194,27 +201,45 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
         grad.addColorStop(0, 'rgba(67, 97, 238, 0.4)');
         grad.addColorStop(1, 'rgba(67, 97, 238, 0.0)');
 
+        // Verifica se existe alguma meta > 0 para decidir se exibe a linha
+        const temMeta = dataMeta.some(v => v > 0);
+
+        const metaDataset = temMeta ? [{
+            label: 'Meta Mensal',
+            data: dataMeta, // Array com a meta de cada mês
+            borderColor: '#ef4444', // Vermelho
+            borderWidth: 2,
+            borderDash: [6, 4],     // Tracejado
+            pointRadius: 3,         // Bolinha pequena
+            pointBackgroundColor: '#ef4444',
+            fill: false,
+            tension: 0.1 // Leve curvatura se a meta variar, ou reta se for fixa
+        }] : [];
+
         chartEv = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: labels,
-                datasets: [{
-                    label: 'Valor (R$)',
-                    data: data,
-                    borderColor: '#4361ee',
-                    backgroundColor: grad,
-                    borderWidth: 3,
-                    fill: true,
-                    tension: 0.4,
-                    pointRadius: 4,
-                    pointBackgroundColor: '#fff',
-                    pointBorderColor: '#4361ee'
-                }]
+                datasets: [
+                    {
+                        label: 'Gasto Real',
+                        data: dataGasto,
+                        borderColor: '#4361ee',
+                        backgroundColor: grad,
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#4361ee'
+                    },
+                    ...metaDataset
+                ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: { legend: { display: temMeta } }, 
                 scales: { 
                     y: { beginAtZero: true, grid: { borderDash: [5,5] }, ticks: { callback: v=>'R$ '+v } },
                     x: { grid: { display: false } }
@@ -223,63 +248,32 @@ $todas_categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
         });
     }
 
-    // --- GRÁFICO 2: DIAS DA SEMANA (BARRA) ---
-    function renderDiasSemana(dataValues) {
+    function renderDiasSemana(d) {
         const ctx = document.getElementById('chartSemana').getContext('2d');
         if(chartDay) chartDay.destroy();
-
         chartDay = new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'],
-                datasets: [{
-                    label: 'Total Gasto',
-                    data: dataValues,
-                    backgroundColor: [
-                        '#e2e8f0', '#3b82f6', '#3b82f6', '#3b82f6', '#3b82f6', '#3b82f6', '#e2e8f0'
-                    ],
-                    borderRadius: 6
-                }]
+                labels: ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'],
+                datasets: [{ label: 'Valor', data: d, backgroundColor: '#e2e8f0', hoverBackgroundColor: '#3b82f6', borderRadius: 6 }]
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { display: false },
-                    x: { grid: { display: false } }
-                }
-            }
+            options: { plugins: { legend: { display: false } }, scales: { y: { display: false }, x: { grid: { display: false } } } }
         });
     }
 
-    // --- GRÁFICO 3: SEMANAS DO MÊS (RADAR OU BARRA) ---
-    function renderSemanaMes(dataValues) {
+    function renderSemanaMes(d) {
         const ctx = document.getElementById('chartMesSemana').getContext('2d');
         if(chartWeek) chartWeek.destroy();
-
         chartWeek = new Chart(ctx, {
             type: 'doughnut',
             data: {
-                labels: ['Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5'],
-                datasets: [{
-                    data: dataValues,
-                    backgroundColor: ['#4cc9f0', '#4361ee', '#3a0ca3', '#7209b7', '#f72585'],
-                    borderWidth: 0
-                }]
+                labels: ['Sem 1','Sem 2','Sem 3','Sem 4','Sem 5'],
+                datasets: [{ data: d, backgroundColor: ['#4cc9f0','#4361ee','#3a0ca3','#7209b7','#f72585'], borderWidth: 0 }]
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '70%',
-                plugins: {
-                    legend: { position: 'right', labels: { boxWidth: 12, usePointStyle: true } }
-                }
-            }
+            options: { cutout: '70%', plugins: { legend: { position: 'right', labels: { boxWidth: 10, usePointStyle: true } } } }
         });
     }
 
-    // Inicialização
     document.addEventListener('DOMContentLoaded', () => { setTimeout(carregarDados, 200); });
 
 <?php endif; ?>
