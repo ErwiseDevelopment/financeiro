@@ -1,5 +1,4 @@
 <?php
-// ajax_check_meta.php
 require_once "../config/database.php";
 session_start();
 
@@ -12,11 +11,7 @@ if (!isset($_SESSION['usuarioid'])) {
 
 $uid = $_SESSION['usuarioid'];
 $cat_id = $_POST['categoria_id'] ?? 0;
-
-// SE A DATA VIER VAZIA, ASSUME HOJE
-$data_raw = $_POST['data'] ?? date('Y-m-d');
-if(empty($data_raw)) $data_raw = date('Y-m-d');
-
+$data_compra_post = $_POST['data'] ?? date('Y-m-d');
 $cartao_id = $_POST['cartao_id'] ?? '';
 
 if (!$cat_id) {
@@ -24,72 +19,99 @@ if (!$cat_id) {
     exit;
 }
 
-// 1. CÁLCULO DA COMPETÊNCIA
-$competencia = date('Y-m', strtotime($data_raw));
+// ---------------------------------------------------------
+// 1. DEFINIR A COMPETÊNCIA (O MÊS DA META)
+// ---------------------------------------------------------
+$data_obj = new DateTime($data_compra_post);
+$dia_compra = (int)$data_obj->format('d');
 
-// Lógica do Cartão (Fatura)
+// Por padrão, a competência é o próprio mês da compra
+$competencia = $data_obj->format('Y-m');
+
+// SE TEM CARTÃO, APLICA REGRA DE FATURA
 if ($cartao_id) {
     $stmtC = $pdo->prepare("SELECT cartofechamento FROM cartoes WHERE cartoid = ? AND usuarioid = ?");
     $stmtC->execute([$cartao_id, $uid]);
-    $fechamento = $stmtC->fetchColumn();
+    $fechamento_db = $stmtC->fetchColumn();
 
-    if ($fechamento) {
-        $dia_compra = (int)date('d', strtotime($data_raw));
-        if ($dia_compra >= $fechamento) {
-            $competencia = date('Y-m', strtotime('+1 month', strtotime($data_raw)));
+    if ($fechamento_db) {
+        $dia_fechamento = (int)$fechamento_db;
+
+        // REGRA DE CORTE (Ex: Fechamento dia 29)
+        // Compra dia 28/12 -> Menor que 29 -> Fatura Jan/24 (+1 mês)
+        // Compra dia 29/12 -> Igual/Maior 29 -> Fatura Fev/24 (+2 meses)
+        
+        if ($dia_compra >= $dia_fechamento) {
+            // Pula para o mês seguinte do seguinte (+2 meses da data base)
+            // Ex: Dez -> Fev
+            $data_obj->modify('first day of +2 months');
+        } else {
+            // Vai para o próximo mês (+1 mês da data base)
+            // Ex: Dez -> Jan
+            $data_obj->modify('first day of next month');
         }
+        
+        $competencia = $data_obj->format('Y-m');
     }
 }
 
-// 2. BUSCA A META (DEBUG ATIVADO)
+// ---------------------------------------------------------
+// 2. BUSCAR A META (Lógica Direta)
+// ---------------------------------------------------------
 $meta = 0;
-$origem = "Nenhuma";
+$tipo_meta = "Nenhuma";
 
-// Tenta achar a meta MENSAL (exata)
+// TENTATIVA A: Buscar na tabela de metas mensais para ESTA competência exata
 $stmtMensal = $pdo->prepare("
-    SELECT valor FROM categorias_metas 
-    WHERE categoriaid = ? AND usuarioid = ? AND competencia = ?
+    SELECT valor 
+    FROM categorias_metas 
+    WHERE categoriaid = ? 
+    AND usuarioid = ? 
+    AND competencia = ? 
+    LIMIT 1
 ");
 $stmtMensal->execute([$cat_id, $uid, $competencia]);
-$meta_mensal = $stmtMensal->fetchColumn();
+$resultado_mensal = $stmtMensal->fetchColumn();
 
-if ($meta_mensal > 0) {
-    $meta = (float)$meta_mensal;
-    $origem = "Mensal ($competencia)";
+if ($resultado_mensal !== false && $resultado_mensal > 0) {
+    $meta = (float)$resultado_mensal;
+    $tipo_meta = "Mensal ($competencia)";
 } else {
-    // Tenta achar a meta FIXA
+    // TENTATIVA B: Se não achou mensal, pega a fixa da categoria
     $stmtFixa = $pdo->prepare("SELECT categoriameta FROM categorias WHERE categoriaid = ? AND usuarioid = ?");
     $stmtFixa->execute([$cat_id, $uid]);
-    $meta_fixa = $stmtFixa->fetchColumn();
+    $resultado_fixo = $stmtFixa->fetchColumn();
     
-    if ($meta_fixa > 0) {
-        $meta = (float)$meta_fixa;
-        $origem = "Fixa (Padrão)";
+    if ($resultado_fixo > 0) {
+        $meta = (float)$resultado_fixo;
+        $tipo_meta = "Fixa";
     }
 }
 
-// Se não achou meta nenhuma, retorna aviso
+// Se não tem meta nenhuma, para por aqui
 if ($meta <= 0) {
-    echo json_encode([
-        'status' => 'no_meta', 
-        'debug_data_recebida' => $data_raw,
-        'debug_competencia_buscada' => $competencia
-    ]);
+    echo json_encode(['status' => 'no_meta', 'debug_comp' => $competencia]);
     exit;
 }
 
-// 3. CÁLCULO DO GASTO
+// ---------------------------------------------------------
+// 3. CALCULAR O TOTAL GASTO NESSE PERÍODO
+// ---------------------------------------------------------
+// Aqui somamos tudo que caiu nessa competência (seja por fatura ou data direta)
 $stmtGasto = $pdo->prepare("
     SELECT COALESCE(SUM(contavalor), 0)
     FROM contas 
     WHERE categoriaid = ? 
     AND usuarioid = ? 
-    AND (contatipo = 'Saída' OR contatipo = 'Despesa')
+    AND (contatipo = 'Saída' OR contatipo = 'Despesa') 
     AND COALESCE(competenciafatura, contacompetencia) = ?
 ");
 $stmtGasto->execute([$cat_id, $uid, $competencia]);
 $gasto = (float)$stmtGasto->fetchColumn();
 
+// ---------------------------------------------------------
+// 4. RETORNO
+// ---------------------------------------------------------
 $mes_label = ucfirst((new IntlDateFormatter('pt_BR', IntlDateFormatter::NONE, IntlDateFormatter::NONE, null, null, 'MMMM yyyy'))->format(strtotime($competencia."-01")));
 
 echo json_encode([
@@ -99,11 +121,6 @@ echo json_encode([
     'competencia_label' => $mes_label,
     'percentual' => ($gasto / $meta) * 100,
     'disponivel' => $meta - $gasto,
-    // Debug para você ver no console
-    'debug_info' => [
-        'data_form' => $data_raw,
-        'competencia_final' => $competencia,
-        'origem_meta' => $origem
-    ]
+    'debug_origem' => $tipo_meta
 ]);
 ?>
