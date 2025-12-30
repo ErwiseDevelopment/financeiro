@@ -6,34 +6,45 @@ $uid = $_SESSION['usuarioid'];
 $mes_filtro = $_GET['mes'] ?? date('Y-m');
 $hoje = date('Y-m-d');
 
+// Função auxiliar SQL para definir a data real (Fatura ou Competência normal)
+$campo_data_real = "COALESCE(competenciafatura, contacompetencia)";
+
 // --- 1. SALDO ACUMULADO CONSOLIDADO (PASSADO) ---
-// Representa o dinheiro real que sobrou de meses anteriores (apenas o que foi pago/recebido)
+// Soma tudo que já foi efetivamente PAGO/RECEBIDO antes deste mês
 $stmt_passado = $pdo->prepare("SELECT 
-    SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) -
-    SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as saldo_passado
-    FROM contas WHERE usuarioid = ? AND contacompetencia < ?");
+    SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) -
+    SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as saldo_passado
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real < ? 
+    AND contasituacao = 'Pago'");
 $stmt_passado->execute([$uid, $mes_filtro]);
 $saldo_passado_consolidado = $stmt_passado->fetch()['saldo_passado'] ?? 0;
 
-// --- 2. PENDÊNCIAS ATRASADAS (O QUE FICOU PARA TRÁS) ---
-// Precisamos saber o total de entradas e saídas pendentes de meses anteriores para a projeção
+// --- 2. PENDÊNCIAS ATRASADAS (GERAL + CARTÃO) ---
+// Soma tudo que está Pendente e ficou para trás
 $stmt_atraso_total = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e_atraso,
     SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s_atraso
-    FROM contas WHERE usuarioid = ? AND contacompetencia < ? AND contasituacao = 'Pendente'");
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real < ? 
+    AND contasituacao = 'Pendente'");
 $stmt_atraso_total->execute([$uid, $mes_filtro]);
 $atrasos = $stmt_atraso_total->fetch();
 $e_atrasada = $atrasos['e_atraso'] ?? 0;
 $s_atrasada = $atrasos['s_atraso'] ?? 0;
 
 // --- 3. MOVIMENTAÇÃO DO MÊS ATUAL ---
+// Agora filtra corretamente pelo mês da fatura para cartões
 $stmt_resumo = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e_total,
     SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s_total,
     SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as e_paga,
     SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as s_paga,
     SUM(CASE WHEN cartoid IS NOT NULL AND contatipo = 'Saída' THEN contavalor ELSE 0 END) as total_cartao_mes
-    FROM contas WHERE usuarioid = ? AND contacompetencia = ?");
+    FROM contas 
+    WHERE usuarioid = ? AND $campo_data_real = ?");
 $stmt_resumo->execute([$uid, $mes_filtro]);
 $res = $stmt_resumo->fetch();
 
@@ -43,42 +54,69 @@ $e_paga = $res['e_paga'] ?? 0;
 $s_paga = $res['s_paga'] ?? 0;
 
 // --- CÁLCULOS DE PROJEÇÃO ---
-
-// Saldo Real Agora: Saldo que veio do passado + o que já foi movimentado no mês atual
 $saldo_real_agora = $saldo_passado_consolidado + ($e_paga - $s_paga);
-
-// Projeção Final (O "pulo do gato"): 
-// Saldo Consolidado + (Tudo que deve entrar no mês e atrasados) - (Tudo que deve sair no mês e atrasados)
 $projecao_final_mes = $saldo_passado_consolidado + ($e_total + $e_atrasada) - ($s_total + $s_atrasada);
 
-// --- 4. CARTÕES E LISTAGENS ---
+// --- 4. DADOS DE CARTÕES E LISTAGENS ---
+
+// Limite Total e Uso Total (Independente de mês, é o saldo devedor global)
 $sql_limite = $pdo->prepare("SELECT SUM(cartolimite) as limite_total FROM cartoes WHERE usuarioid = ?");
 $sql_limite->execute([$uid]);
 $limite_geral = $sql_limite->fetch()['limite_total'] ?? 0;
 
 $sql_uso_total = $pdo->prepare("SELECT SUM(contavalor) as total_pendente FROM contas 
-                               WHERE usuarioid = ? AND cartoid IS NOT NULL AND contasituacao = 'Pendente'");
+                                WHERE usuarioid = ? AND cartoid IS NOT NULL AND contasituacao = 'Pendente'");
 $sql_uso_total->execute([$uid]);
 $total_uso_cartao = $sql_uso_total->fetch()['total_pendente'] ?? 0;
 
-// Listagem de atrasadas para o box vermelho
+// --- A. LISTAGEM DE ATRASADOS (Contas Normais) ---
+// Exclui cartões, pois eles serão agrupados abaixo
 $stmt_atrasadas = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
-    FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-    WHERE c.usuarioid = ? AND c.contacompetencia < ? AND c.contasituacao = 'Pendente' 
+    FROM contas c 
+    JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+    WHERE c.usuarioid = ? 
+    AND c.contacompetencia < ? 
+    AND c.contasituacao = 'Pendente' 
+    AND c.cartoid IS NULL -- Apenas contas normais
     ORDER BY c.contavencimento ASC");
 $stmt_atrasadas->execute([$uid, $mes_filtro]);
 $contas_atrasadas = $stmt_atrasadas->fetchAll();
 
-// Listagem principal do mês
-$stmt_contas = $pdo->prepare("SELECT c.*, cat.categoriadescricao FROM contas c 
+// --- B. LISTAGEM DE ATRASADOS (Cartões Agrupados) ---
+// Agrupa as parcelas pendentes de meses anteriores por Cartão e Mês da Fatura
+$stmt_atrasos_cartao = $pdo->prepare("SELECT 
+        car.cartonome, 
+        car.cartoid, 
+        c.competenciafatura,
+        SUM(c.contavalor) as total_fatura,
+        car.cartovencimento as dia_vencimento
+    FROM contas c 
+    JOIN cartoes car ON c.cartoid = car.cartoid
+    WHERE c.usuarioid = ? 
+    AND c.competenciafatura < ? 
+    AND c.contasituacao = 'Pendente'
+    GROUP BY car.cartoid, c.competenciafatura
+    ORDER BY c.competenciafatura ASC");
+$stmt_atrasos_cartao->execute([$uid, $mes_filtro]);
+$faturas_atrasadas = $stmt_atrasos_cartao->fetchAll();
+
+// --- C. MOVIMENTAÇÃO DO MÊS (Contas Normais) ---
+$stmt_contas = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
+    FROM contas c 
     JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-    WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.cartoid IS NULL ORDER BY c.contavencimento ASC");
+    WHERE c.usuarioid = ? 
+    AND c.contacompetencia = ? 
+    AND c.cartoid IS NULL 
+    ORDER BY c.contavencimento ASC");
 $stmt_contas->execute([$uid, $mes_filtro]);
 $contas_lista = $stmt_contas->fetchAll();
 
+// --- D. MOVIMENTAÇÃO DO MÊS (Cartões Agrupados) ---
 $stmt_agrup_cartao = $pdo->prepare("SELECT car.cartonome, car.cartoid, SUM(c.contavalor) as total_fatura 
     FROM contas c JOIN cartoes car ON c.cartoid = car.cartoid
-    WHERE c.usuarioid = ? AND c.contacompetencia = ? GROUP BY car.cartoid, car.cartonome");
+    WHERE c.usuarioid = ? 
+    AND c.competenciafatura = ? -- Agora usa o campo correto
+    GROUP BY car.cartoid, car.cartonome");
 $stmt_agrup_cartao->execute([$uid, $mes_filtro]);
 $cartoes_resumo = $stmt_agrup_cartao->fetchAll();
 ?>
@@ -142,9 +180,9 @@ $cartoes_resumo = $stmt_agrup_cartao->fetchAll();
         </div>
 
         <div class="col-12 col-md-5">
-            <a href="faturas.php" class="card-credit h-100 shadow-sm">
+            <a href="faturas_geral.php" class="card-credit h-100 shadow-sm">
                 <div class="d-flex justify-content-between align-items-start mb-2">
-                    <small class="opacity-75 fw-bold text-uppercase" style="font-size: 0.6rem;">Limite em Uso (Cartões)</small>
+                    <small class="opacity-75 fw-bold text-uppercase" style="font-size: 0.6rem;">Limite em Uso (Global)</small>
                     <i class="bi bi-credit-card-2-front fs-4 opacity-50"></i>
                 </div>
                 <h4 class="fw-bold mb-3">R$ <?= number_format($total_uso_cartao, 2, ',', '.') ?></h4>
@@ -161,8 +199,30 @@ $cartoes_resumo = $stmt_agrup_cartao->fetchAll();
 
     <div class="px-1">
         
-        <?php if(!empty($contas_atrasadas)): ?>
+        <?php if(!empty($contas_atrasadas) || !empty($faturas_atrasadas)): ?>
             <h6 class="text-danger fw-bold mt-4 mb-3 small text-uppercase"><i class="bi bi-exclamation-octagon-fill"></i> Pendências de Meses Anteriores</h6>
+            
+            <?php foreach($faturas_atrasadas as $fa): 
+                // Calcula a data de vencimento histórica
+                $vencimento_fatura = $fa['competenciafatura'] . '-' . str_pad($fa['dia_vencimento'], 2, '0', STR_PAD_LEFT);
+            ?>
+                <div class="transaction-item atrasada-item shadow-sm">
+                    <div class="flex-grow-1">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-credit-card-fill text-danger me-2"></i>
+                            <span class="fw-bold small d-block">Fatura <?= $fa['cartonome'] ?></span>
+                        </div>
+                        <small class="text-muted" style="font-size: 0.7rem;">
+                            Comp: <?= date('m/Y', strtotime($fa['competenciafatura'])) ?> • Venceu: <?= date('d/m', strtotime($vencimento_fatura)) ?>
+                        </small>
+                    </div>
+                    <div class="text-end">
+                        <span class="fw-bold d-block small text-danger">R$ <?= number_format($fa['total_fatura'], 2, ',', '.') ?></span>
+                        <a href="faturas.php?cartoid=<?= $fa['cartoid'] ?>&mes=<?= $fa['competenciafatura'] ?>" class="btn-action text-danger">Ver Fatura</a>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+
             <?php foreach($contas_atrasadas as $ca): ?>
                 <div class="transaction-item atrasada-item shadow-sm">
                     <div class="flex-grow-1">
@@ -180,6 +240,7 @@ $cartoes_resumo = $stmt_agrup_cartao->fetchAll();
         <?php endif; ?>
 
         <h6 class="fw-bold text-muted mt-4 mb-3 small text-uppercase">Movimentações de <?= date('M/y', strtotime($mes_filtro)) ?></h6>
+        
         <?php if(empty($contas_lista) && empty($cartoes_resumo)): ?>
             <div class="text-center py-4 opacity-50">
                 <i class="bi bi-inbox fs-1 d-block mb-2"></i>

@@ -16,7 +16,8 @@ $stmt_cat = $pdo->prepare("SELECT * FROM categorias WHERE usuarioid = ? ORDER BY
 $stmt_cat->execute([$uid]);
 $categorias = $stmt_cat->fetchAll();
 
-$stmt_cartoes = $pdo->prepare("SELECT cartoid, cartonome FROM cartoes WHERE usuarioid = ? ORDER BY cartonome ASC");
+// AJUSTE 1: Buscando também o dia de fechamento para usar no JS
+$stmt_cartoes = $pdo->prepare("SELECT cartoid, cartonome, cartofechamento FROM cartoes WHERE usuarioid = ? ORDER BY cartonome ASC");
 $stmt_cartoes->execute([$uid]);
 $cartoes = $stmt_cartoes->fetchAll();
 ?>
@@ -77,6 +78,18 @@ $cartoes = $stmt_cartoes->fetchAll();
     .action-buttons { display: flex; gap: 15px; margin-top: 20px; }
     .btn-confirm { background: #1e293b; color: #fff; border-radius: 20px; padding: 18px; font-weight: 700; border: none; flex: 2; }
     .btn-add-more { background: #fff; color: #1e293b; border: 2px solid #e2e8f0; border-radius: 20px; padding: 18px; font-weight: 700; flex: 1; }
+    
+    /* Novo estilo para feedback da fatura */
+    .badge-fatura {
+        background-color: #dbeafe;
+        color: #1e40af;
+        padding: 5px 10px;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-top: 5px;
+        display: inline-block;
+    }
 </style>
 
 <div class="app-container">
@@ -130,10 +143,10 @@ $cartoes = $stmt_cartoes->fetchAll();
 
                     <div id="divCartao" style="<?= $tipo_pre == 'Entrada' ? 'display:none;' : '' ?>">
                         <label class="label-app">Pagamento via</label>
-                        <select name="cartoid" class="form-select input-app">
-                            <option value="">Saldo em Conta</option>
+                        <select name="cartoid" id="selectCartao" class="form-select input-app">
+                            <option value="" data-fechamento="0">Saldo em Conta / Débito</option>
                             <?php foreach($cartoes as $cartao): ?>
-                                <option value="<?= $cartao['cartoid'] ?>" <?= ($cartao['cartoid'] == $car_pre) ? 'selected' : '' ?>>
+                                <option value="<?= $cartao['cartoid'] ?>" data-fechamento="<?= $cartao['cartofechamento'] ?>" <?= ($cartao['cartoid'] == $car_pre) ? 'selected' : '' ?>>
                                     💳 <?= $cartao['cartonome'] ?>
                                 </option>
                             <?php endforeach; ?>
@@ -151,8 +164,10 @@ $cartoes = $stmt_cartoes->fetchAll();
                         </div>
                     </div>
                     <div class="mb-4">
-                        <label class="label-app">Vencimento</label>
-                        <input type="date" name="contavencimento" class="form-control input-app" value="<?= $venc_pre ?>" required>
+                        <label class="label-app" id="labelData">Vencimento</label>
+                        <input type="date" name="contavencimento" id="contavencimento" class="form-control input-app" value="<?= $venc_pre ?>" required>
+                        
+                        <div id="feedbackFatura" class="fade-in mt-2" style="display:none;"></div>
                     </div>
                     <div>
                         <label class="label-app">Parcelas</label>
@@ -203,11 +218,8 @@ $cartoes = $stmt_cartoes->fetchAll();
 <script>
     let tomControl;
 
-    // Inicialização Segura
     window.addEventListener('DOMContentLoaded', () => {
         const selectElement = document.getElementById('selectCategoria');
-        
-        // Verifica se a biblioteca TomSelect existe
         if (typeof TomSelect !== "undefined") {
             tomControl = new TomSelect(selectElement, {
                 create: false,
@@ -215,19 +227,18 @@ $cartoes = $stmt_cartoes->fetchAll();
                 allowEmptyOption: true
             });
             filtrarCategorias();
-        } else {
-            console.error("TomSelect não carregou via CDN");
         }
+
+        // Inicia verificação de data para caso venha preenchido
+        verificarPrevisaoFatura();
     });
 
-    // Filtro Dinâmico
+    // --- Lógica de Filtro de Categoria (Mantida) ---
     function filtrarCategorias() {
         if (!tomControl) return;
-
         const tipoSelecionado = document.querySelector('input[name="contatipo"]:checked').value;
         const valorAtual = tomControl.getValue();
         
-        // Dados originais do PHP
         const categoriasJson = <?= json_encode(array_map(function($c) {
             return [
                 'id' => $c['categoriaid'],
@@ -237,25 +248,69 @@ $cartoes = $stmt_cartoes->fetchAll();
         }, $categorias)) ?>;
 
         tomControl.clearOptions();
-        
         categoriasJson.forEach(cat => {
             if (cat.tipo === tipoSelecionado) {
                 tomControl.addOption({value: cat.id, text: cat.text});
             }
         });
 
-        // Só mantém o valor se ele for do tipo certo
         const existeNoNovoTipo = categoriasJson.find(c => c.id == valorAtual && c.tipo == tipoSelecionado);
-        if (existeNoNovoTipo) {
-            tomControl.setValue(valorAtual);
-        } else {
-            tomControl.clear();
-        }
-
+        if (existeNoNovoTipo) tomControl.setValue(valorAtual);
+        else tomControl.clear();
+        
         tomControl.refreshOptions(false);
     }
 
-    // Máscara de Moeda
+    // --- NOVA LÓGICA: Previsão de Fatura ---
+    const selectCartao = document.getElementById('selectCartao');
+    const inputData = document.getElementById('contavencimento');
+    const labelData = document.getElementById('labelData');
+    const feedbackFatura = document.getElementById('feedbackFatura');
+
+    function verificarPrevisaoFatura() {
+        const cartaoId = selectCartao.value;
+        const dataSelecionada = inputData.value;
+
+        // Se não tiver cartão selecionado
+        if (!cartaoId) {
+            labelData.innerText = "Vencimento";
+            feedbackFatura.style.display = 'none';
+            return;
+        }
+
+        // Se tem cartão, mudamos o label para educar o usuário
+        labelData.innerText = "Data da Compra";
+
+        if (!dataSelecionada) return;
+
+        // Recupera o dia de fechamento do atributo data-fechamento
+        const opcaoCartao = selectCartao.options[selectCartao.selectedIndex];
+        const diaFechamento = parseInt(opcaoCartao.getAttribute('data-fechamento')) || 1;
+
+        // Cria objeto Data (Cuidado com timezone, usando replace para evitar conversão UTC)
+        const dateObj = new Date(dataSelecionada + "T12:00:00");
+        const diaCompra = dateObj.getDate();
+        
+        // Lógica de projeção (Mesma do PHP)
+        let dataFatura = new Date(dateObj);
+        
+        if (diaCompra >= diaFechamento) {
+            // Pula para o próximo mês
+            dataFatura.setMonth(dataFatura.getMonth() + 1);
+        }
+
+        // Formata Mês/Ano (ex: Janeiro/2026)
+        const nomeMes = dataFatura.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
+        
+        feedbackFatura.innerHTML = `<span class="badge-fatura"><i class="bi bi-calendar-check"></i> Fatura: ${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}</span>`;
+        feedbackFatura.style.display = 'block';
+    }
+
+    // Listeners para atualizar a previsão em tempo real
+    selectCartao.addEventListener('change', verificarPrevisaoFatura);
+    inputData.addEventListener('change', verificarPrevisaoFatura);
+
+    // --- Outros Listeners ---
     document.getElementById('valor_display').addEventListener('input', function(e) {
         let value = e.target.value.replace(/\D/g, "");
         value = (value / 100).toFixed(2);
@@ -263,67 +318,65 @@ $cartoes = $stmt_cartoes->fetchAll();
         document.getElementById('valor_real').value = value;
     });
 
-    // Eventos de Tipo
     document.querySelectorAll('input[name="contatipo"]').forEach(r => {
         r.addEventListener('change', () => {
-            document.getElementById('divCartao').style.display = (r.value === 'Entrada') ? 'none' : 'block';
+            const isEntrada = (r.value === 'Entrada');
+            document.getElementById('divCartao').style.display = isEntrada ? 'none' : 'block';
+            
+            // Se mudou para entrada, limpa o cartão para não bugar a lógica
+            if(isEntrada) {
+                selectCartao.value = "";
+                verificarPrevisaoFatura();
+            }
             filtrarCategorias();
         });
     });
 
-   function salvarCategoriaRapida() {
-    const nome = document.getElementById('nome_nova_categoria').value;
-    const tipoSelecionadoNoModal = document.getElementById('tipo_nova_categoria').value; 
-    // Captura "Entrada" ou "Saída" do select do modal
+    function salvarCategoriaRapida() {
+        const nome = document.getElementById('nome_nova_categoria').value;
+        const tipoSelecionadoNoModal = document.getElementById('tipo_nova_categoria').value; 
 
-    if (!nome) {
-        alert("Por favor, digite o nome da categoria.");
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('categoriadescricao', nome);
-    formData.append('categoriatipo', tipoSelecionadoNoModal);
-
-    fetch('ajax_rapido_categoria.php', { 
-        method: 'POST', 
-        body: formData 
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === 'success') {
-            // 1. Adiciona a opção no buscador (TomSelect)
-            tomControl.addOption({
-                value: data.id, 
-                text: data.nome,
-                tipo: tipoSelecionadoNoModal // Armazena o tipo para o filtro funcionar
-            });
-
-            // 2. Fecha o modal
-            const modalEl = document.getElementById('modalRapidoCategoria');
-            const modalInstance = bootstrap.Modal.getInstance(modalEl);
-            modalInstance.hide();
-
-            // 3. Limpa o campo do modal
-            document.getElementById('nome_nova_categoria').value = "";
-
-            // 4. Se a categoria criada for do mesmo tipo que o formulário está exibindo, seleciona ela
-            const tipoFormulario = document.querySelector('input[name="contatipo"]:checked').value;
-            if (tipoSelecionadoNoModal === tipoFormulario) {
-                tomControl.setValue(data.id);
-            } else {
-                alert("Categoria salva! Como ela é de um tipo diferente do lançamento atual, ela ficará disponível quando você alternar entre Receita/Despesa.");
-            }
-
-        } else {
-            alert(data.message);
+        if (!nome) {
+            alert("Por favor, digite o nome da categoria.");
+            return;
         }
-    })
-    .catch(err => {
-        console.error(err);
-        alert("Erro ao salvar categoria.");
-    });
-}
+
+        const formData = new FormData();
+        formData.append('categoriadescricao', nome);
+        formData.append('categoriatipo', tipoSelecionadoNoModal);
+
+        fetch('ajax_rapido_categoria.php', { 
+            method: 'POST', 
+            body: formData 
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                tomControl.addOption({
+                    value: data.id, 
+                    text: data.nome,
+                    tipo: tipoSelecionadoNoModal 
+                });
+                const modalEl = document.getElementById('modalRapidoCategoria');
+                const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                modalInstance.hide();
+                document.getElementById('nome_nova_categoria').value = "";
+                
+                const tipoFormulario = document.querySelector('input[name="contatipo"]:checked').value;
+                if (tipoSelecionadoNoModal === tipoFormulario) {
+                    tomControl.setValue(data.id);
+                } else {
+                    alert("Categoria salva! Ela aparecerá quando mudar o tipo.");
+                }
+            } else {
+                alert(data.message);
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            alert("Erro ao salvar categoria.");
+        });
+    }
 </script>
 
 <?php require_once "../includes/footer.php"; ?>

@@ -5,36 +5,47 @@ require_once "../includes/header.php";
 $uid = $_SESSION['usuarioid'];
 $mes_filtro = $_GET['mes'] ?? date('Y-m');
 
-// --- LÓGICA DE DATAS ---
+// --- 0. PREPARAÇÃO (Datas e Lógica de Competência) ---
 $primeiro_dia_mes = $mes_filtro . "-01";
-$dias_restantes = (date('Y-m') == $mes_filtro) ? max(1, (int)date('t') - (int)date('d')) : 30;
+$campo_data_real = "COALESCE(competenciafatura, contacompetencia)"; // O segredo da lógica unificada
 
 // --- 1. SALDO ACUMULADO (PASSADO PAGO) ---
+// O que sobrou de dinheiro real antes deste mês
 $stmt_passado = $pdo->prepare("SELECT 
-    SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) -
-    SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as saldo_acumulado
-    FROM contas WHERE usuarioid = ? AND contacompetencia < ?");
+    SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) -
+    SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as saldo_acumulado
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real < ? 
+    AND contasituacao = 'Pago'");
 $stmt_passado->execute([$uid, $mes_filtro]);
 $saldo_anterior_pago = $stmt_passado->fetch()['saldo_acumulado'] ?? 0;
 
 // --- 2. PENDÊNCIAS ATRASADAS (PASSADO PENDENTE) ---
+// O que deveria ter entrado/saído antes e ainda não aconteceu
 $stmt_atraso = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e_atraso,
     SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s_atraso
-    FROM contas WHERE usuarioid = ? AND contacompetencia < ? AND contasituacao = 'Pendente'");
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real < ? 
+    AND contasituacao = 'Pendente'");
 $stmt_atraso->execute([$uid, $mes_filtro]);
 $res_atraso = $stmt_atraso->fetch();
 $e_atraso = $res_atraso['e_atraso'] ?? 0;
 $s_atraso = $res_atraso['s_atraso'] ?? 0;
 
-// --- 3. TOTAIS DO MÊS FILTRADO ---
+// --- 3. TOTAIS DO MÊS FILTRADO (COM CORREÇÃO DE CARTÃO) ---
+// Aqui aplicamos o filtro pela competência real (Fatura ou Mês Compra)
 $stmt_totais = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e_total,
     SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s_total,
     SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as e_paga,
     SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as s_paga,
-    SUM(CASE WHEN cartoid IS NOT NULL THEN contavalor ELSE 0 END) as total_cartao
-    FROM contas WHERE usuarioid = ? AND contacompetencia = ?");
+    SUM(CASE WHEN cartoid IS NOT NULL AND contatipo = 'Saída' THEN contavalor ELSE 0 END) as total_cartao
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real = ?");
 $stmt_totais->execute([$uid, $mes_filtro]);
 $res = $stmt_totais->fetch();
 
@@ -49,52 +60,86 @@ $v_dinheiro  = $s_total_mes - $v_cartao;
 $saldo_real_hoje = $saldo_anterior_pago + ($e_paga_mes - $s_paga_mes);
 $projecao_final = $saldo_anterior_pago + ($e_total_mes + $e_atraso) - ($s_total_mes + $s_atraso);
 $taxa_poupanca = ($e_total_mes > 0) ? (($e_total_mes - $s_total_mes) / $e_total_mes) * 100 : 0;
-// --- NOVA ANÁLISE: COMPROMETIMENTO ---
+
+// Análise de Comprometimento
 $percentual_gasto = ($e_total_mes > 0) ? ($s_total_mes / $e_total_mes) * 100 : 0;
 $status_cor = 'text-success';
 if($percentual_gasto > 70) $status_cor = 'text-warning';
 if($percentual_gasto > 90) $status_cor = 'text-danger';
 
 // --- 4. SAÚDE DO CRÉDITO (GLOBAL) ---
-$stmt_cartoes = $pdo->prepare("SELECT SUM(cartolimite) as limite_total,
-    (SELECT SUM(contavalor) FROM contas WHERE usuarioid = ? AND cartoid IS NOT NULL AND contasituacao = 'Pendente') as total_comprometido
-    FROM cartoes WHERE usuarioid = ?");
-$stmt_cartoes->execute([$uid, $uid]);
-$infocartao = $stmt_cartoes->fetch();
-$limite_total = $infocartao['limite_total'] ?? 0;
-$total_preso = abs($infocartao['total_comprometido'] ?? 0);
+// Limite total de todos os cartões vs. Tudo que está pendente neles (Futuro e Passado)
+$stmt_cartoes = $pdo->prepare("SELECT SUM(cartolimite) as limite_total FROM cartoes WHERE usuarioid = ?");
+$stmt_cartoes->execute([$uid]);
+$limite_total = $stmt_cartoes->fetch()['limite_total'] ?? 0;
+
+$stmt_uso_cartao = $pdo->prepare("SELECT SUM(contavalor) as total_comprometido 
+                                  FROM contas 
+                                  WHERE usuarioid = ? 
+                                  AND cartoid IS NOT NULL 
+                                  AND contasituacao = 'Pendente' 
+                                  AND contatipo = 'Saída'");
+$stmt_uso_cartao->execute([$uid]);
+$total_preso = abs($stmt_uso_cartao->fetch()['total_comprometido'] ?? 0);
+
 $perc_limite = ($limite_total > 0) ? ($total_preso / $limite_total) * 100 : 0;
 
 // --- 5. DADOS PARA GRÁFICOS ---
-// Histórico 6 meses
+
+// A. Histórico 6 meses (Corrigido com data real)
 $meses_hist = []; $valores_hist_e = []; $valores_hist_s = [];
 for($i = 5; $i >= 0; $i--) {
     $m = date('Y-m', strtotime("-$i months", strtotime(date('Y-m-01'))));
-    $stmt_h = $pdo->prepare("SELECT SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e, SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s FROM contas WHERE usuarioid = ? AND contacompetencia = ?");
+    $stmt_h = $pdo->prepare("SELECT 
+        SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e, 
+        SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s 
+        FROM contas 
+        WHERE usuarioid = ? AND $campo_data_real = ?");
     $stmt_h->execute([$uid, $m]);
     $h = $stmt_h->fetch();
     $meses_hist[] = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMM')) ->format(strtotime($m."-01")));
-    $valores_hist_e[] = abs($h['e'] ?? 0); $valores_hist_s[] = abs($h['s'] ?? 0);
+    $valores_hist_e[] = abs($h['e'] ?? 0); 
+    $valores_hist_s[] = abs($h['s'] ?? 0);
 }
 
-// Pizza Categorias (Top 5)
-$stmt_pizza = $pdo->prepare("SELECT cat.categoriadescricao as label, SUM(c.contavalor) as total FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída' GROUP BY cat.categoriaid ORDER BY total DESC ");
+// B. Pizza Categorias (Top 5)
+$stmt_pizza = $pdo->prepare("SELECT cat.categoriadescricao as label, SUM(c.contavalor) as total 
+    FROM contas c 
+    JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+    WHERE c.usuarioid = ? 
+    AND $campo_data_real = ? 
+    AND c.contatipo = 'Saída' 
+    GROUP BY cat.categoriaid 
+    ORDER BY total DESC");
 $stmt_pizza->execute([$uid, $mes_filtro]);
 $dados_pizza = $stmt_pizza->fetchAll(PDO::FETCH_ASSOC);
 
-// Fluxo Semanal
-$stmt_semanal = $pdo->prepare("SELECT FLOOR((DAY(contavencimento)-1)/7)+1 as semana, SUM(contavalor) as total FROM contas WHERE usuarioid = ? AND contacompetencia = ? AND contatipo = 'Saída' GROUP BY semana ORDER BY semana");
+// C. Fluxo Semanal
+$stmt_semanal = $pdo->prepare("SELECT FLOOR((DAY(contavencimento)-1)/7)+1 as semana, SUM(contavalor) as total 
+    FROM contas 
+    WHERE usuarioid = ? 
+    AND $campo_data_real = ? 
+    AND contatipo = 'Saída' 
+    GROUP BY semana ORDER BY semana");
 $stmt_semanal->execute([$uid, $mes_filtro]);
 $semanal_res = $stmt_semanal->fetchAll(PDO::FETCH_KEY_PAIR);
 $valores_semanais = [];
 for($w=1; $w<=5; $w++) { $valores_semanais[] = $semanal_res[$w] ?? 0; }
 
-// --- 6. CATEGORIAS E LANÇAMENTOS (LISTA) ---
-$stmt_cat = $pdo->prepare("SELECT cat.categoriaid, cat.categoriadescricao as label, SUM(c.contavalor) as total FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída' GROUP BY cat.categoriaid ORDER BY total DESC");
+// --- 6. LISTAGEM COMPLETA ---
+$stmt_cat = $pdo->prepare("SELECT cat.categoriaid, cat.categoriadescricao as label, SUM(c.contavalor) as total 
+    FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+    WHERE c.usuarioid = ? AND $campo_data_real = ? AND c.contatipo = 'Saída' 
+    GROUP BY cat.categoriaid ORDER BY total DESC");
 $stmt_cat->execute([$uid, $mes_filtro]);
 $categorias_lista = $stmt_cat->fetchAll(PDO::FETCH_ASSOC);
 
-$stmt_all = $pdo->prepare("SELECT c.*, cat.categoriadescricao, car.cartonome FROM contas c LEFT JOIN categorias cat ON c.categoriaid = cat.categoriaid LEFT JOIN cartoes car ON c.cartoid = car.cartoid WHERE c.usuarioid = ? AND c.contacompetencia = ? ORDER BY c.contavencimento DESC");
+$stmt_all = $pdo->prepare("SELECT c.*, cat.categoriadescricao, car.cartonome 
+    FROM contas c 
+    LEFT JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+    LEFT JOIN cartoes car ON c.cartoid = car.cartoid 
+    WHERE c.usuarioid = ? AND $campo_data_real = ? 
+    ORDER BY c.contavencimento DESC");
 $stmt_all->execute([$uid, $mes_filtro]);
 $todos_lancamentos = $stmt_all->fetchAll(PDO::FETCH_ASSOC);
 
@@ -178,12 +223,12 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
                 <h6 class="fw-bold mb-4 small text-uppercase opacity-75">Saúde do Crédito (Global)</h6>
                 <div class="row align-items-center">
                     <div class="col-md-6 border-end border-secondary border-opacity-50">
-                        <small class="opacity-50 d-block mb-1">Limite Comprometido</small>
+                        <small class="opacity-50 d-block mb-1">Limite Comprometido (Total)</small>
                         <h2 class="fw-bold mb-2">R$ <?= number_format($total_preso, 2, ',', '.') ?></h2>
                         <div class="progress mb-2" style="height: 6px; background: rgba(255,255,255,0.1);">
-                            <div class="progress-bar bg-info" style="width: <?= $perc_limite ?>%"></div>
+                            <div class="progress-bar bg-info" style="width: <?= min(100, $perc_limite) ?>%"></div>
                         </div>
-                        <small class="text-info"><?= number_format($perc_limite, 1) ?>% em uso</small>
+                        <small class="text-info"><?= number_format($perc_limite, 1) ?>% do limite tomado</small>
                     </div>
                     <div class="col-md-6 ps-md-4">
                         <small class="opacity-50 d-block mb-1">Disponível Total</small>
@@ -194,30 +239,26 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
             </div>
         </div>
         <div class="col-12 col-lg-5">
-    <div class="card-stat p-4 text-center d-flex flex-column justify-content-center border-start border-purple border-4">
-        <h6 class="fw-bold mb-3 small text-uppercase text-muted">Comprometimento de Renda</h6>
-        
-        <div class="position-relative d-inline-flex align-items-center justify-content-center mb-3">
-            <h2 class="fw-bold <?= $status_cor ?> mb-0"><?= round($percentual_gasto) ?>%</h2>
+            <div class="card-stat p-4 text-center d-flex flex-column justify-content-center border-start border-purple border-4">
+                <h6 class="fw-bold mb-3 small text-uppercase text-muted">Comprometimento de Renda</h6>
+                <div class="position-relative d-inline-flex align-items-center justify-content-center mb-3">
+                    <h2 class="fw-bold <?= $status_cor ?> mb-0"><?= round($percentual_gasto) ?>%</h2>
+                </div>
+                <p class="small text-muted mb-3">Você já utilizou <strong><?= round($percentual_gasto) ?>%</strong> da sua receita mensal.</p>
+                <div class="progress" style="height: 10px; border-radius: 20px; background: #eee;">
+                    <div class="progress-bar bg-<?= ($percentual_gasto > 80) ? 'danger' : (($percentual_gasto > 50) ? 'warning' : 'success') ?>" 
+                         role="progressbar" 
+                         style="width: <?= min(100, $percentual_gasto) ?>%"></div>
+                </div>
+                <?php if($percentual_gasto < 70): ?>
+                    <small class="mt-3 text-success fw-bold"><i class="bi bi-check-circle-fill"></i> Saúde excelente</small>
+                <?php elseif($percentual_gasto <= 90): ?>
+                    <small class="mt-3 text-warning fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> Atenção aos gastos</small>
+                <?php else: ?>
+                    <small class="mt-3 text-danger fw-bold"><i class="bi bi-x-octagon-fill"></i> Limite Crítico</small>
+                <?php endif; ?>
+            </div>
         </div>
-        
-        <p class="small text-muted mb-3">Você já utilizou <strong><?= round($percentual_gasto) ?>%</strong> da sua receita mensal.</p>
-        
-        <div class="progress" style="height: 10px; border-radius: 20px; background: #eee;">
-            <div class="progress-bar bg-<?= ($percentual_gasto > 80) ? 'danger' : (($percentual_gasto > 50) ? 'warning' : 'success') ?>" 
-                 role="progressbar" 
-                 style="width: <?= min(100, $percentual_gasto) ?>%"></div>
-        </div>
-        
-        <?php if($percentual_gasto < 70): ?>
-            <small class="mt-3 text-success fw-bold"><i class="bi bi-check-circle-fill"></i> Saúde excelente</small>
-        <?php elseif($percentual_gasto <= 90): ?>
-            <small class="mt-3 text-warning fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> Atenção aos gastos</small>
-        <?php else: ?>
-            <small class="mt-3 text-danger fw-bold"><i class="bi bi-x-octagon-fill"></i> Limite Crítico</small>
-        <?php endif; ?>
-    </div>
-</div>
     </div>
 
     <div class="row g-4 mb-4">
@@ -264,7 +305,8 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
                         <div class="flex-grow-1 text-truncate">
                             <h6 class="mb-0 fw-bold <?= $pago ? 'text-muted text-decoration-line-through' : '' ?>" style="font-size: 0.8rem;"><?= $l['contadescricao'] ?></h6>
                             <small class="text-muted" style="font-size: 0.7rem;">
-                                <?= date('d/m', strtotime($l['contavencimento'])) ?> • <?= $l['categoriadescricao'] ?> <?= $l['cartonome'] ? " • <span class='text-warning'>{$l['cartonome']}</span>" : "" ?>
+                                <?= date('d/m', strtotime($l['contavencimento'])) ?> • <?= $l['categoriadescricao'] ?> 
+                                <?= $l['cartonome'] ? " • <span class='badge bg-warning text-dark' style='font-size:0.6rem'>{$l['cartonome']}</span>" : "" ?>
                             </small>
                         </div>
                         <div class="text-end ms-3">
@@ -307,7 +349,7 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
         options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
     });
 
-    // 2. Gráfico Pizza (Novo)
+    // 2. Gráfico Pizza (AJUSTADO: SEM LEGENDA LATERAL)
     new Chart(document.getElementById('chartPizza'), {
         type: 'doughnut',
         data: {
@@ -318,19 +360,25 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
                 borderWidth: 0
             }]
         },
-        options: { maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'right' } } }
+        options: { 
+            maintainAspectRatio: false, 
+            cutout: '70%', 
+            plugins: { 
+                legend: { display: false } // REMOVIDA A LEGENDA LATERAL
+            } 
+        }
     });
 
-    // 3. Gráfico Semanal (Novo)
+    // 3. Gráfico Semanal
     new Chart(document.getElementById('chartSemanal'), {
         type: 'bar',
         data: {
-            labels: ['Semana 1', 'Semana 2', 'Semana 3', 'Semana 4', 'Semana 5'],
+            labels: ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4', 'Sem 5'],
             datasets: [{
                 label: 'Gastos R$',
                 data: <?= json_encode($valores_semanais) ?>,
                 backgroundColor: '#4361ee',
-                borderRadius: 10
+                borderRadius: 6
             }]
         },
         options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
