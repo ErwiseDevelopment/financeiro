@@ -78,7 +78,7 @@ for($i = 5; $i >= 0; $i--) {
 }
 
 // Pizza Categorias (Top 5)
-$stmt_pizza = $pdo->prepare("SELECT cat.categoriadescricao as label, SUM(c.contavalor) as total FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída' GROUP BY cat.categoriaid ORDER BY total DESC LIMIT 5");
+$stmt_pizza = $pdo->prepare("SELECT cat.categoriadescricao as label, SUM(c.contavalor) as total FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída' GROUP BY cat.categoriaid ORDER BY total DESC ");
 $stmt_pizza->execute([$uid, $mes_filtro]);
 $dados_pizza = $stmt_pizza->fetchAll(PDO::FETCH_ASSOC);
 
