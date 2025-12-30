@@ -27,18 +27,42 @@ $itens_pendentes_mes = 0;
 $limite_cartao = 0;
 
 if ($cartao_selecionado) {
-    // 2. Busca o limite do cartão selecionado
+    // 2. Busca o limite e o fechamento do cartão selecionado
+    $dia_fechamento = 1;
     foreach($meus_cartoes as $m) { 
-        if($m['cartoid'] == $cartao_selecionado) $limite_cartao = $m['cartolimite']; 
+        if($m['cartoid'] == $cartao_selecionado) {
+            $limite_cartao = $m['cartolimite'];
+            $dia_fechamento = $m['cartofechamento']; // Importante para o filtro
+        }
     }
 
-    // 3. Busca itens da fatura do MÊS ATUAL (para a listagem e total do mês)
-    $stmt_f = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
+    // --- NOVA LÓGICA DE FILTRO DE FATURA ---
+    // Definimos o mês anterior para buscar as compras após o fechamento
+    $data_alvo = new DateTime($mes_filtro . "-01");
+    $mes_atual_texto = $data_alvo->format('Y-m');
+    $mes_anterior_texto = (clone $data_alvo)->modify('-1 month')->format('Y-m');
+
+    // A Query agora busca:
+    // 1. Compras do mês anterior feitas APÓS ou NO DIA do fechamento
+    // 2. Compras do mês atual feitas ANTES do fechamento
+    $sql_fatura = "SELECT c.*, cat.categoriadescricao 
         FROM contas c 
         JOIN categorias cat ON c.categoriaid = cat.categoriaid 
-        WHERE c.usuarioid = ? AND c.cartoid = ? AND c.contacompetencia = ?
-        ORDER BY c.contavencimento ASC");
-    $stmt_f->execute([$uid, $cartao_selecionado, $mes_filtro]);
+        WHERE c.usuarioid = ? AND c.cartoid = ? 
+        AND (
+            (c.contacompetencia = ? AND DAY(c.contavencimento) >= ?) 
+            OR 
+            (c.contacompetencia = ? AND DAY(c.contavencimento) < ?)
+        )
+        ORDER BY c.contavencimento ASC";
+
+    $stmt_f = $pdo->prepare($sql_fatura);
+    $stmt_f->execute([
+        $uid, 
+        $cartao_selecionado, 
+        $mes_anterior_texto, $dia_fechamento, // Parte 1: Final do mês passado
+        $mes_atual_texto, $dia_fechamento    // Parte 2: Início do mês atual
+    ]);
     $itens_fatura = $stmt_f->fetchAll();
 
     foreach($itens_fatura as $i) { 

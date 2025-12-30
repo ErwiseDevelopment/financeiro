@@ -33,6 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $dia_original = (int)$data->format('d'); 
 
             if ($i > 1) {
+                // Avança o mês de forma segura para não pular meses curtos
                 $data->modify('first day of +' . ($i - 1) . ' month');
                 $ultimo_dia_mes = (int)$data->format('t');
                 $novo_dia = min($dia_original, $ultimo_dia_mes);
@@ -42,20 +43,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $vencimento_parcela = $data->format('Y-m-d');
             $dia_compra = (int)$data->format('d');
 
-            // --- LÓGICA DE COMPETÊNCIA AJUSTADA (Mês de Pagamento) ---
+            // --- LÓGICA DE COMPETÊNCIA (FATURA) ---
             $data_competencia = clone $data;
             if ($cartoid) {
-                // REGRA ATUALIZADA:
-                // Se comprou ATÉ o dia do fechamento, paga no mês seguinte.
-                // Se comprou APÓS o fechamento, a fatura desse mês já fechou, paga em 2 meses.
-                if ($dia_compra <= $dia_fechamento) {
+                // Margem de segurança: Se a compra for hoje e o fechamento amanhã, 
+                // ou se for hoje e o fechamento hoje, já vai para a próxima fatura.
+                $margem_proxima_fatura = $dia_fechamento - 1;
+
+                if ($dia_compra >= $margem_proxima_fatura) {
                     $data_competencia->modify('first day of next month');
-                } else {
-                    $data_competencia->modify('first day of +2 month');
                 }
             }
             $competencia = $data_competencia->format('Y-m');
             
+            // Ajusta descrição para parcelados
             $desc_final = ($parcelas_total > 1) ? $contadescricao . " ($i/$parcelas_total)" : $contadescricao;
 
             $sql = "INSERT INTO contas (
@@ -82,7 +83,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $pdo->commit();
 
+        // --- LÓGICA DE REDIRECIONAMENTO INTELIGENTE ---
         if (isset($_POST['manter_dados']) && $_POST['manter_dados'] == '1') {
+            // Monta os parâmetros para manter o formulário preenchido
             $params = http_build_query([
                 'msg'  => 'sucesso',
                 'tipo' => $contatipo,
@@ -93,6 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
             header("Location: cadastro_conta.php?" . $params);
         } else {
+            // Redirecionamento padrão para a index
             header("Location: index.php?msg=sucesso");
         }
         exit;
@@ -104,3 +108,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         die("Erro ao salvar: " . $e->getMessage());
     }
 }
+
+
+
