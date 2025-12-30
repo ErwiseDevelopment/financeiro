@@ -5,7 +5,15 @@ require_once "../includes/header.php";
 $uid = $_SESSION['usuarioid'];
 $mes_filtro = $_GET['mes'] ?? date('Y-m');
 
-// --- 1. BUSCA TOTAIS ROBUSTOS ---
+// --- 1. SALDO ACUMULADO (SÓ O QUE FOI PAGO/RECEBIDO NO PASSADO) ---
+$stmt_passado = $pdo->prepare("SELECT 
+    SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) -
+    SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as saldo_acumulado
+    FROM contas WHERE usuarioid = ? AND contacompetencia < ?");
+$stmt_passado->execute([$uid, $mes_filtro]);
+$saldo_anterior = $stmt_passado->fetch()['saldo_acumulado'] ?? 0;
+
+// --- 2. BUSCA TOTAIS DO MÊS FILTRADO ---
 $stmt_totais = $pdo->prepare("SELECT 
     SUM(CASE WHEN contatipo = 'Entrada' THEN contavalor ELSE 0 END) as e_total,
     SUM(CASE WHEN contatipo = 'Saída' THEN contavalor ELSE 0 END) as s_total,
@@ -18,26 +26,21 @@ $res = $stmt_totais->fetch();
 
 $e_total = abs($res['e_total'] ?? 0);
 $s_total = abs($res['s_total'] ?? 0);
-
-// --- CÁLCULO DO SALDO ACUMULADO (Necessário para o Saldo Real fiel) ---
-$stmt_anterior = $pdo->prepare("SELECT 
-    SUM(CASE WHEN contatipo = 'Entrada' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) -
-    SUM(CASE WHEN contatipo = 'Saída' AND contasituacao = 'Pago' THEN contavalor ELSE 0 END) as saldo_acumulado
-    FROM contas WHERE usuarioid = ? AND contacompetencia < ?");
-$stmt_anterior->execute([$uid, $mes_filtro]);
-$saldo_anterior = $stmt_anterior->fetch()['saldo_acumulado'] ?? 0;
-
-$saldo_mes_atual_pago = abs($res['e_paga'] ?? 0) - abs($res['s_paga'] ?? 0);
-$saldo_real = $saldo_anterior + $saldo_mes_atual_pago;
-
-// --- NOVO CÁLCULO SOLICITADO: RESUMO DO MÊS ---
-$resumo_mes_final = $saldo_real + $e_total - $s_total;
-
+$e_paga  = abs($res['e_paga'] ?? 0);
+$s_paga  = abs($res['s_paga'] ?? 0);
 $despesa_pendente = abs($res['s_pendente'] ?? 0);
-$saldo_previsto = $e_total - $s_total;
-$taxa_poupanca = ($e_total > 0) ? ($saldo_previsto / $e_total) * 100 : 0;
 
-// --- 2. ANÁLISE DE CARTÃO ---
+// SALDO REAL (O que tem no bolso agora)
+$saldo_real = $saldo_anterior + ($e_paga - $s_paga);
+
+// RESUMO DO MÊS (Projeção final considerando o passado)
+$resumo_mes_final = $saldo_anterior + ($e_total - $s_total);
+
+// Margem Líquida do Mês (Eficiência)
+$saldo_previsto_mes = $e_total - $s_total;
+$taxa_poupanca = ($e_total > 0) ? ($saldo_previsto_mes / $e_total) * 100 : 0;
+
+// --- 3. ANÁLISE DE CARTÃO (GLOBAL) ---
 $stmt_cartoes = $pdo->prepare("SELECT SUM(cartolimite) as limite_total,
     (SELECT SUM(contavalor) FROM contas WHERE usuarioid = ? AND cartoid IS NOT NULL AND contasituacao = 'Pendente') as total_comprometido
     FROM cartoes WHERE usuarioid = ?");
@@ -48,7 +51,7 @@ $total_preso = abs($infocartao['total_comprometido'] ?? 0);
 $limite_livre = $limite_total - $total_preso;
 $perc_limite = ($limite_total > 0) ? ($total_preso / $limite_total) * 100 : 0;
 
-// --- 3. MEIOS DE PAGAMENTO ---
+// --- 4. MEIOS DE PAGAMENTO (COMPETÊNCIA) ---
 $stmt_metodos = $pdo->prepare("SELECT 
     SUM(CASE WHEN cartoid IS NOT NULL THEN contavalor ELSE 0 END) as total_cartao,
     SUM(CASE WHEN cartoid IS NULL THEN contavalor ELSE 0 END) as total_dinheiro
@@ -58,7 +61,7 @@ $metodos = $stmt_metodos->fetch();
 $v_cartao = abs($metodos['total_cartao'] ?? 0);
 $v_dinheiro = abs($metodos['total_dinheiro'] ?? 0);
 
-// --- 4. HISTÓRICO 6 MESES ---
+// --- 5. HISTÓRICO 6 MESES ---
 $meses_hist = []; $valores_hist_e = []; $valores_hist_s = [];
 for($i = 5; $i >= 0; $i--) {
     $m = date('Y-m', strtotime("-$i months", strtotime(date('Y-m-01'))));
@@ -73,7 +76,7 @@ for($i = 5; $i >= 0; $i--) {
     $valores_hist_s[] = abs($h['s'] ?? 0);
 }
 
-// --- 5. CATEGORIAS E LANÇAMENTOS ---
+// --- 6. CATEGORIAS E LANÇAMENTOS ---
 $stmt_cat = $pdo->prepare("SELECT cat.categoriaid, cat.categoriadescricao as label, SUM(c.contavalor) as total 
     FROM contas c JOIN categorias cat ON c.categoriaid = cat.categoriaid 
     WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.contatipo = 'Saída'
@@ -102,6 +105,7 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
     .hidden { display: none !important; }
     .progress-thin { height: 6px; border-radius: 10px; background: rgba(0,0,0,0.05); }
     .text-resumo { color: var(--purple); }
+    .bg-purple-soft { background-color: #f3e8ff; border: 1px solid #e9d5ff; }
 </style>
 
 <div class="container py-4">
@@ -115,7 +119,7 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
                 <i class="bi bi-calendar3 me-2 text-primary"></i>Alterar Mês
             </button>
             <ul class="dropdown-menu shadow border-0">
-                <?php for($i = -3; $i <= 3; $i++): $m = date('Y-m', strtotime("$i month")); ?>
+                <?php for($i = -2; $i <= 4; $i++): $m = date('Y-m', strtotime("$i month")); ?>
                     <li><a class="dropdown-item" href="?mes=<?= $m ?>"><?= $m ?></a></li>
                 <?php endfor; ?>
             </ul>
@@ -126,21 +130,21 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
         <div class="col-6 col-md">
             <div class="card-stat p-3">
                 <div class="icon-box bg-success bg-opacity-10 text-success mb-2"><i class="bi bi-arrow-up-circle"></i></div>
-                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">RENDA TOTAL</small>
+                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">ENTRADAS (TOTAL)</small>
                 <h6 class="fw-bold text-dark mb-0">R$ <?= number_format($e_total, 2, ',', '.') ?></h6>
             </div>
         </div>
         <div class="col-6 col-md">
             <div class="card-stat p-3">
                 <div class="icon-box bg-danger bg-opacity-10 text-danger mb-2"><i class="bi bi-arrow-down-circle"></i></div>
-                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">SAÍDA TOTAL</small>
+                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">SAÍDAS (TOTAL)</small>
                 <h6 class="fw-bold text-dark mb-0">R$ <?= number_format($s_total, 2, ',', '.') ?></h6>
             </div>
         </div>
         <div class="col-6 col-md">
             <div class="card-stat p-3">
                 <div class="icon-box bg-warning bg-opacity-10 text-warning mb-2"><i class="bi bi-clock-history"></i></div>
-                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">A PAGAR</small>
+                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">PENDENTE MÊS</small>
                 <h6 class="fw-bold text-dark mb-0">R$ <?= number_format($despesa_pendente, 2, ',', '.') ?></h6>
             </div>
         </div>
@@ -152,9 +156,9 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
             </div>
         </div>
         <div class="col-12 col-md">
-            <div class="card-stat p-3 border border-purple bg-opacity-10" style="background-color: #f3e8ff;">
+            <div class="card-stat p-3 bg-purple-soft">
                 <div class="icon-box bg-purple text-white mb-2" style="background-color: var(--purple);"><i class="bi bi-calculator"></i></div>
-                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">RESUMO MÊS</small>
+                <small class="text-muted fw-bold d-block mb-1" style="font-size: 0.6rem;">PROJEÇÃO FINAL</small>
                 <h6 class="fw-bold text-resumo mb-0">R$ <?= number_format($resumo_mes_final, 2, ',', '.') ?></h6>
             </div>
         </div>
@@ -188,7 +192,7 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
                     <div style="width: 110px; height: 110px;"><canvas id="chartMeios"></canvas></div>
                     <div>
                         <h4 class="fw-bold mb-0 text-primary"><?= number_format($taxa_poupanca, 1) ?>%</h4>
-                        <small class="text-muted">de margem líquida</small>
+                        <small class="text-muted">margem líquida prevista</small>
                     </div>
                 </div>
             </div>
@@ -196,7 +200,7 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
     </div>
 
     <div class="card-stat p-4 mb-4">
-        <h6 class="fw-bold mb-4 small text-uppercase text-muted">Tendência de Fluxo de Caixa</h6>
+        <h6 class="fw-bold mb-4 small text-uppercase text-muted">Tendência de Fluxo de Caixa (Competência)</h6>
         <div style="height: 250px;"><canvas id="chartEvolucao"></canvas></div>
     </div>
 
@@ -217,18 +221,25 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
         </div>
         <div class="col-12 col-lg-8">
             <div class="card-stat p-4">
-                <h6 class="fw-bold mb-4 small text-uppercase text-muted" id="extrato-title">Lançamentos</h6>
+                <h6 class="fw-bold mb-4 small text-uppercase text-muted">Extrato Mensal</h6>
                 <div id="extrato-container">
-                    <?php foreach($todos_lancamentos as $l): $is_saida = ($l['contatipo'] == 'Saída'); ?>
+                    <?php foreach($todos_lancamentos as $l): 
+                        $is_saida = ($l['contatipo'] == 'Saída'); 
+                        $pago = ($l['contasituacao'] == 'Pago');
+                    ?>
                     <div class="transaction-item js-item" data-catid="<?= $l['categoriaid'] ?>">
                         <div class="flex-grow-1">
-                            <h6 class="mb-0 fw-bold" style="font-size: 0.8rem;"><?= $l['contadescricao'] ?></h6>
-                            <small class="text-muted" style="font-size: 0.7rem;"><?= date('d/m', strtotime($l['contavencimento'])) ?> • <?= $l['categoriadescricao'] ?></small>
+                            <h6 class="mb-0 fw-bold <?= $pago ? 'text-muted text-decoration-line-through' : '' ?>" style="font-size: 0.8rem;"><?= $l['contadescricao'] ?></h6>
+                            <small class="text-muted" style="font-size: 0.7rem;">
+                                <?= date('d/m', strtotime($l['contavencimento'])) ?> • <?= $l['categoriadescricao'] ?> 
+                                <?= $l['cartonome'] ? " • <span class='text-warning'>{$l['cartonome']}</span>" : "" ?>
+                            </small>
                         </div>
                         <div class="text-end">
                             <span class="fw-bold d-block <?= $is_saida ? 'text-dark' : 'text-success' ?>" style="font-size: 0.8rem;">
                                 <?= $is_saida ? '-' : '+' ?> R$ <?= number_format(abs($l['contavalor']), 2, ',', '.') ?>
                             </span>
+                            <span class="badge <?= $pago ? 'bg-success' : 'bg-light text-dark' ?>" style="font-size: 0.5rem;"><?= $pago ? 'PAGO' : 'PENDENTE' ?></span>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -253,20 +264,28 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
         data: {
             labels: <?= json_encode($meses_hist) ?>,
             datasets: [
-                { label: 'Entradas', data: <?= json_encode($valores_hist_e) ?>, borderColor: '#10b981', tension: 0.4 },
-                { label: 'Saídas', data: <?= json_encode($valores_hist_s) ?>, borderColor: '#ef4444', tension: 0.4 }
+                { label: 'Entradas', data: <?= json_encode($valores_hist_e) ?>, borderColor: '#10b981', tension: 0.4, fill: false },
+                { label: 'Saídas', data: <?= json_encode($valores_hist_s) ?>, borderColor: '#ef4444', tension: 0.4, fill: false }
             ]
         },
-        options: { maintainAspectRatio: false }
+        options: { 
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom' } },
+            scales: { y: { beginAtZero: true } }
+        }
     });
 
     new Chart(document.getElementById('chartMeios'), {
         type: 'doughnut',
         data: {
             labels: ['Dinheiro', 'Cartão'],
-            datasets: [{ data: [<?= $v_dinheiro ?>, <?= $v_cartao ?>], backgroundColor: ['#4361ee', '#8b5cf6'] }]
+            datasets: [{ 
+                data: [<?= $v_dinheiro ?>, <?= $v_cartao ?>], 
+                backgroundColor: ['#4361ee', '#f59e0b'],
+                borderWidth: 0
+            }]
         },
-        options: { maintainAspectRatio: false, cutout: '75%', plugins: { legend: { display: false } } }
+        options: { maintainAspectRatio: false, cutout: '80%', plugins: { legend: { display: false } } }
     });
 </script>
 
