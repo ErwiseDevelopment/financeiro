@@ -11,9 +11,12 @@ $data_atual = new DateTime($mes_filtro . "-01");
 $mes_anterior = (clone $data_atual)->modify('-1 month')->format('Y-m');
 $mes_proximo = (clone $data_atual)->modify('+1 month')->format('Y-m');
 
-// Formatadores de data para exibição
+// Formatadores
 $fmt_mes_ano = new IntlDateFormatter('pt_BR', IntlDateFormatter::NONE, IntlDateFormatter::NONE, 'America/Sao_Paulo', IntlDateFormatter::GREGORIAN, "MMM yy");
 $fmt_mes_longo = new IntlDateFormatter('pt_BR', IntlDateFormatter::NONE, IntlDateFormatter::NONE, 'America/Sao_Paulo', IntlDateFormatter::GREGORIAN, "MMMM");
+
+// Campo mágico para filtrar pela fatura correta
+$campo_data_real = "COALESCE(competenciafatura, contacompetencia)";
 
 // 1. Busca cartões
 $stmt_cards = $pdo->prepare("SELECT * FROM cartoes WHERE usuarioid = ? ORDER BY cartonome ASC");
@@ -30,9 +33,12 @@ foreach ($meus_cartoes as $cartao) {
     $limite_cartao = (float)$cartao['cartolimite'];
     $limite_total_geral += $limite_cartao;
     
-    // GASTO DO MÊS
+    // GASTO DO MÊS (CORRIGIDO)
+    // Agora usa 'competenciafatura' para somar exatamente o que vai cair nesta fatura
     $sql_mes = "SELECT SUM(contavalor) as total FROM contas 
-                WHERE usuarioid = ? AND cartoid = ? AND contacompetencia = ?";
+                WHERE usuarioid = ? AND cartoid = ? 
+                AND $campo_data_real = ?";
+                
     if ($filtro_tipo == 'parcelados') $sql_mes .= " AND contaparcela_total > 1";
     if ($filtro_tipo == 'avulsos') $sql_mes .= " AND contaparcela_total <= 1";
     
@@ -41,9 +47,12 @@ foreach ($meus_cartoes as $cartao) {
     $gasto_mes = (float)($stmt_mes->fetch()['total'] ?? 0);
     $gasto_mes_consolidado += $gasto_mes;
 
-    // USO TOTAL (Pendentes)
+    // USO TOTAL (Pendentes Globais)
+    // Adicionado 'AND contatipo = Saída' para garantir que estornos não atrapalhem o cálculo do limite
     $stmt_total = $pdo->prepare("SELECT SUM(contavalor) as total FROM contas 
-                                 WHERE usuarioid = ? AND cartoid = ? AND contasituacao = 'Pendente'");
+                                 WHERE usuarioid = ? AND cartoid = ? 
+                                 AND contasituacao = 'Pendente' 
+                                 AND contatipo = 'Saída'");
     $stmt_total->execute([$uid, $cid]);
     $uso_total_cartao = (float)($stmt_total->fetch()['total'] ?? 0);
     $utilizado_total_global += $uso_total_cartao;
@@ -128,7 +137,7 @@ $perc_geral = ($limite_total_geral > 0) ? ($utilizado_total_global / $limite_tot
                     <a href="faturas.php?cartoid=<?= $res['id'] ?>&mes=<?= $mes_filtro ?>" 
                        class="btn btn-sm btn-outline-dark rounded-pill py-1 px-3" 
                        style="font-size: 0.7rem; font-weight: bold;">
-                       VER FATURA
+                        VER FATURA
                     </a>
                 </div>
                 

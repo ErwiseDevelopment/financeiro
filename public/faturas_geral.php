@@ -22,11 +22,14 @@ $stmt_uso_real->execute([$uid]);
 $total_uso_geral = $stmt_uso_real->fetch()['total_preso'] ?? 0;
 
 // 3. SQL da Fatura do Mês (Listagem da tela)
+// Filtra pela 'competenciafatura' (se existir) ou 'contacompetencia' para garantir a visualização correta
 $sql_base = "SELECT c.*, car.cartonome, cat.categoriadescricao 
              FROM contas c
              JOIN cartoes car ON c.cartoid = car.cartoid
              JOIN categorias cat ON c.categoriaid = cat.categoriaid
-             WHERE c.usuarioid = ? AND c.contacompetencia = ? AND c.cartoid IS NOT NULL";
+             WHERE c.usuarioid = ? 
+             AND COALESCE(c.competenciafatura, c.contacompetencia) = ? 
+             AND c.cartoid IS NOT NULL";
 
 if ($filtro_tipo == 'parcelados') $sql_base .= " AND c.contaparcela_total > 1";
 if ($filtro_tipo == 'avulsos') $sql_base .= " AND c.contaparcela_total <= 1";

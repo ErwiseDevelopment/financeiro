@@ -284,7 +284,13 @@ $titulo_mes = ucfirst((new IntlDateFormatter('pt_BR', 0, 0, null, null, 'MMMM yy
     <div class="row g-4">
         <div class="col-12 col-lg-4">
             <div class="card-stat p-4">
-                <h6 class="fw-bold mb-4 small text-uppercase text-muted">Filtrar por Categoria</h6>
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h6 class="fw-bold m-0 small text-uppercase text-muted">Filtrar por Categoria</h6>
+                    <a href="analise_categorias.php" class="btn btn-sm btn-outline-primary rounded-pill px-3 py-1 fw-bold" style="font-size: 0.65rem;">
+                        <i class="bi bi-graph-up-arrow me-1"></i> VER ANÁLISE
+                    </a>
+                </div>
+
                 <?php foreach($categorias_lista as $c): $p = ($s_total_mes > 0) ? ($c['total'] / $s_total_mes) * 100 : 0; ?>
                 <button class="category-btn" onclick="filterCategory(<?= $c['categoriaid'] ?>, this)">
                     <div class="d-flex justify-content-between align-items-center mb-1">
