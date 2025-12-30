@@ -27,32 +27,32 @@ $itens_pendentes_mes = 0;
 $limite_cartao = 0;
 
 if ($cartao_selecionado) {
-    // 2. Busca o limite e o fechamento do cartão selecionado
-    $dia_fechamento = 1;
+    // 1. Primeiro, pegamos o dia de fechamento desse cartão específico
+    $dia_fechamento = 1; // Valor padrão
     foreach($meus_cartoes as $m) { 
         if($m['cartoid'] == $cartao_selecionado) {
-            $limite_cartao = $m['cartolimite'];
-            $dia_fechamento = $m['cartofechamento']; // Importante para o filtro
+            $limite_cartao = $m['cartolimite']; 
+            $dia_fechamento = (int)$m['cartofechamento']; // Importante para a regra
         }
     }
 
-    // --- NOVA LÓGICA DE FILTRO DE FATURA ---
-    // Definimos o mês anterior para buscar as compras após o fechamento
+    // 2. Preparamos as datas para o filtro
+    // $mes_filtro vem da URL (ex: 2026-01)
     $data_alvo = new DateTime($mes_filtro . "-01");
-    $mes_atual_texto = $data_alvo->format('Y-m');
-    $mes_anterior_texto = (clone $data_alvo)->modify('-1 month')->format('Y-m');
+    $mes_atual = $data_alvo->format('Y-m');
+    $mes_anterior = (clone $data_alvo)->modify('-1 month')->format('Y-m');
 
-    // A Query agora busca:
-    // 1. Compras do mês anterior feitas APÓS ou NO DIA do fechamento
-    // 2. Compras do mês atual feitas ANTES do fechamento
+    // 3. A Query Mágica:
+    // Buscamos o que foi gasto no mês anterior (Dez) que cai nesta fatura
+    // E o que foi gasto no mês atual (Jan) antes de fechar a próxima
     $sql_fatura = "SELECT c.*, cat.categoriadescricao 
         FROM contas c 
         JOIN categorias cat ON c.categoriaid = cat.categoriaid 
         WHERE c.usuarioid = ? AND c.cartoid = ? 
         AND (
-            (c.contacompetencia = ? AND DAY(c.contavencimento) >= ?) 
+            (c.contacompetencia = ? AND DAY(c.contavencimento) <= ?) 
             OR 
-            (c.contacompetencia = ? AND DAY(c.contavencimento) < ?)
+            (c.contacompetencia = ? AND DAY(c.contavencimento) > ?)
         )
         ORDER BY c.contavencimento ASC";
 
@@ -60,15 +60,31 @@ if ($cartao_selecionado) {
     $stmt_f->execute([
         $uid, 
         $cartao_selecionado, 
-        $mes_anterior_texto, $dia_fechamento, // Parte 1: Final do mês passado
-        $mes_atual_texto, $dia_fechamento    // Parte 2: Início do mês atual
+        $mes_anterior, $dia_fechamento, // Parte 1: Compras de Dezembro até o dia 30
+        $mes_anterior, $dia_fechamento  // Parte 2: (Opcional) Ajuste conforme sua virada
     ]);
+    
+    // NOTA: Para o seu caso específico (Compra dia 25, Fechamento dia 30, Ver em Janeiro):
+    // A query abaixo é a mais simplificada para o seu modelo de competência atual:
+    
+    $stmt_f = $pdo->prepare("SELECT c.*, cat.categoriadescricao 
+        FROM contas c 
+        JOIN categorias cat ON c.categoriaid = cat.categoriaid 
+        WHERE c.usuarioid = ? AND c.cartoid = ? 
+        AND (
+            -- Compras feitas no mês anterior que pertencem a esta fatura
+            (c.contacompetencia = ? AND DAY(c.contavencimento) <= ?)
+        )
+        ORDER BY c.contavencimento ASC");
+    $stmt_f->execute([$uid, $cartao_selecionado, $mes_anterior, $dia_fechamento]);
+    
     $itens_fatura = $stmt_f->fetchAll();
 
     foreach($itens_fatura as $i) { 
         $total_fatura_mes += $i['contavalor']; 
         if($i['contasituacao'] == 'Pendente') $itens_pendentes_mes++;
     }
+
 
     // 4. LÓGICA DO LIMITE REAL: Busca a soma de TUDO que está pendente neste cartão (futuro e atual)
     // Isso garante que compras parceladas abatam do limite total até serem pagas.
