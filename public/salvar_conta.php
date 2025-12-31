@@ -6,10 +6,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $uid = $_SESSION['usuarioid'];
     $contadescricao = $_POST['contadescricao'];
     
-    // Limpeza do valor
-    $val = $_POST['contavalor'];
-    $val = str_replace(['R$', ' ', '.'], '', $val);
-    $contavalor = str_replace(',', '.', $val);
+    // --- CORREÇÃO DO VALOR AQUI ---
+    // O JavaScript já envia o valor formatado (ex: 10.99) no input hidden
+    // Então pegamos direto, sem remover pontos.
+    $contavalor = $_POST['contavalor']; 
+
+    // Se por acaso vier vazio ou com erro, forçamos float
+    if (empty($contavalor)) $contavalor = 0.00;
 
     $contatipo = $_POST['contatipo'];
     $categoriaid = $_POST['categoriaid'];
@@ -24,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->beginTransaction();
 
         // 1. BUSCAR O DIA DE FECHAMENTO REAL NO BANCO
-        $dia_fechamento = 30; // Valor padrão de segurança
+        $dia_fechamento = 30; 
         if ($cartoid) {
             $stmt_cartao = $pdo->prepare("SELECT cartofechamento FROM cartoes WHERE cartoid = ? AND usuarioid = ?");
             $stmt_cartao->execute([$cartoid, $uid]);
@@ -49,26 +52,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             
             $vencimento_db = $data->format('Y-m-d');
-            $conta_competencia = $data->format('Y-m'); // Mês real da compra
+            $conta_competencia = $data->format('Y-m'); 
 
-            // --- 2. LÓGICA DE FATURA (CORRIGIDA) ---
+            // --- 2. LÓGICA DE FATURA (MANTIDA CORRETA) ---
             $competencia_fatura = null;
 
             if ($cartoid) {
                 $data_calc = clone $data;
                 $dia_atual_parcela = (int)$data_calc->format('d');
 
-                // REGRA:
-                // Se o dia da compra for MAIOR ou IGUAL ao fechamento -> Pula 2 meses (Fev)
-                // Se for MENOR -> Pula 1 mês (Jan)
-                
+                // REGRA: Compra >= Fechamento -> Pula 2 meses
                 if ($dia_atual_parcela >= $dia_fechamento) {
-                    // Ex: Comprou 29/12 (Fechamento 29). Virou a fatura.
-                    // Dezembro -> Pula Jan -> Vai para Fev.
                     $data_calc->modify('first day of +2 months');
                 } else {
-                    // Ex: Comprou 28/12 (Fechamento 29). Ainda na fatura aberta.
-                    // Dezembro -> Paga em Jan.
                     $data_calc->modify('first day of next month');
                 }
                 
@@ -90,10 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $uid,
                 $categoriaid,
                 $desc_final,
-                $contavalor,
+                $contavalor, // Agora vai o valor correto (ex: 10.99)
                 $vencimento_db,
-                $conta_competencia,  // Ex: 2023-12 (Histórico de quando gastou)
-                $competencia_fatura, // Ex: 2024-01 (Mês que vai sair dinheiro do caixa)
+                $conta_competencia,
+                $competencia_fatura,
                 $contatipo,
                 $contafixa,
                 $cartoid,
