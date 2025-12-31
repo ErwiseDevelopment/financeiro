@@ -22,23 +22,29 @@ try {
         $dateObjFim = new DateTime($_POST['mes_fim'] . '-01');
         $dt_end = $dateObjFim->format('Y-m-t');
 
-        // 1. EVOLUÇÃO MENSAL (Gasto + Meta do Mês)
-        // Subquery para pegar a meta exata daquele mês
+        // ---------------------------------------------------------
+        // 1. EVOLUÇÃO MENSAL (CORREÇÃO DO SQL AQUI)
+        // ---------------------------------------------------------
+        // A lógica do COALESCE foi simplificada para não usar JOIN na subquery,
+        // evitando o erro de "Column not found".
         $stmt = $pdo->prepare("
             SELECT 
                 c.contacompetencia, 
                 SUM(c.contavalor) as total_gasto,
-                (
-                    SELECT COALESCE(m.valor, cat.categoriameta, 0)
-                    FROM categorias cat
-                    LEFT JOIN categorias_metas m ON m.categoriaid = cat.categoriaid AND m.competencia = c.contacompetencia
-                    WHERE cat.categoriaid = c.categoriaid
-                    LIMIT 1
+                COALESCE(
+                    -- 1. Tenta pegar a meta específica daquele mês na tabela categorias_metas
+                    (SELECT valor FROM categorias_metas WHERE categoriaid = c.categoriaid AND competencia = c.contacompetencia LIMIT 1),
+                    
+                    -- 2. Se não achar, pega a meta padrão da tabela categorias
+                    (SELECT categoriameta FROM categorias WHERE categoriaid = c.categoriaid LIMIT 1),
+                    
+                    -- 3. Se não tiver nada, zero.
+                    0
                 ) as meta_do_mes
             FROM contas c
             WHERE c.usuarioid = ? 
             AND c.categoriaid = ? 
-            AND c.contatipo = 'Saída'
+            AND (c.contatipo = 'Saída' OR c.contatipo = 'Despesa')
             AND c.contavencimento BETWEEN ? AND ?
             GROUP BY c.contacompetencia 
             ORDER BY c.contacompetencia ASC
@@ -53,7 +59,7 @@ try {
         $meses_nome = ['01'=>'Jan','02'=>'Fev','03'=>'Mar','04'=>'Abr','05'=>'Mai','06'=>'Jun','07'=>'Jul','08'=>'Ago','09'=>'Set','10'=>'Out','11'=>'Nov','12'=>'Dez'];
 
         foreach($dados_evolucao as $d) {
-            // Formata Label
+            // Formata Label (Ex: Jan/25)
             $parts = explode('-', $d['contacompetencia']);
             if(count($parts)==2) $labels[] = ($meses_nome[$parts[1]]??$parts[1])."/".substr($parts[0],2,2);
             else $labels[] = $d['contacompetencia'];
@@ -63,22 +69,31 @@ try {
             $values_meta[]  = (float)$d['meta_do_mes'];
         }
 
+        // ---------------------------------------------------------
         // 2. DADOS SECUNDÁRIOS (Semana/Dias)
-        // ... (Mantém a lógica anterior para dias da semana) ...
-        $stmtDay = $pdo->prepare("SELECT DAYOFWEEK(contavencimento) as dia, SUM(contavalor) as total FROM contas WHERE usuarioid = ? AND categoriaid = ? AND contatipo = 'Saída' AND contavencimento BETWEEN ? AND ? GROUP BY dia ORDER BY dia ASC");
+        // ---------------------------------------------------------
+        
+        // Dias da Semana
+        $stmtDay = $pdo->prepare("SELECT DAYOFWEEK(contavencimento) as dia, SUM(contavalor) as total FROM contas WHERE usuarioid = ? AND categoriaid = ? AND (contatipo = 'Saída' OR contatipo = 'Despesa') AND contavencimento BETWEEN ? AND ? GROUP BY dia ORDER BY dia ASC");
         $stmtDay->execute([$uid, $cat_id, $dt_start, $dt_end]);
         $resDay = $stmtDay->fetchAll(PDO::FETCH_KEY_PAIR);
         $data_semana = []; for($i=1; $i<=7; $i++) $data_semana[] = (float)($resDay[$i] ?? 0);
 
-        $stmtWeek = $pdo->prepare("SELECT FLOOR((DAY(contavencimento)-1)/7)+1 as semana, SUM(contavalor) as total FROM contas WHERE usuarioid = ? AND categoriaid = ? AND contatipo = 'Saída' AND contavencimento BETWEEN ? AND ? GROUP BY semana ORDER BY semana ASC");
+        // Semanas do Mês
+        $stmtWeek = $pdo->prepare("SELECT FLOOR((DAY(contavencimento)-1)/7)+1 as semana, SUM(contavalor) as total FROM contas WHERE usuarioid = ? AND categoriaid = ? AND (contatipo = 'Saída' OR contatipo = 'Despesa') AND contavencimento BETWEEN ? AND ? GROUP BY semana ORDER BY semana ASC");
         $stmtWeek->execute([$uid, $cat_id, $dt_start, $dt_end]);
         $resWeek = $stmtWeek->fetchAll(PDO::FETCH_KEY_PAIR);
         $data_mes_semana = []; for($i=1; $i<=5; $i++) $data_mes_semana[] = (float)($resWeek[$i] ?? 0);
 
-        // 3. TOTAIS GERAIS
+        // ---------------------------------------------------------
+        // 3. TOTAIS GERAIS (KPIs)
+        // ---------------------------------------------------------
         $total_gasto = array_sum($values_gasto);
         $total_meta_acumulada = array_sum($values_meta);
-        $qtd_registros = $pdo->query("SELECT COUNT(*) FROM contas WHERE usuarioid=$uid AND categoriaid=$cat_id AND contatipo='Saída' AND contavencimento BETWEEN '$dt_start' AND '$dt_end'")->fetchColumn();
+        
+        $stmtQtd = $pdo->prepare("SELECT COUNT(*) FROM contas WHERE usuarioid=? AND categoriaid=? AND (contatipo='Saída' OR contatipo='Despesa') AND contavencimento BETWEEN ? AND ?");
+        $stmtQtd->execute([$uid, $cat_id, $dt_start, $dt_end]);
+        $qtd_registros = $stmtQtd->fetchColumn();
         
         $perc_uso = ($total_meta_acumulada > 0) ? ($total_gasto / $total_meta_acumulada) * 100 : 0;
 
@@ -87,7 +102,7 @@ try {
             'evolucao' => [
                 'labels' => $labels, 
                 'gasto' => $values_gasto, 
-                'meta' => $values_meta // Array com a meta de cada mês
+                'meta' => $values_meta 
             ],
             'semana' => $data_semana, 
             'mes_semanas' => $data_mes_semana,

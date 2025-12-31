@@ -7,7 +7,7 @@ $mes_filtro = $_GET['mes'] ?? date('Y-m');
 
 // --- 0. PREPARAÇÃO (Datas e Lógica de Competência) ---
 $primeiro_dia_mes = $mes_filtro . "-01";
-$campo_data_real = "COALESCE(competenciafatura, contacompetencia)"; 
+$campo_data_real = "contacompetencia"; 
 
 // --- 1. SALDO REAL ACUMULADO (CAIXA ATUAL) ---
 // Considera apenas o que foi PAGO no passado. É o dinheiro que você tem na mão hoje.
