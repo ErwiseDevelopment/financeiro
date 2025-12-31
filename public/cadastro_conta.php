@@ -16,7 +16,7 @@ $stmt_cat = $pdo->prepare("SELECT * FROM categorias WHERE usuarioid = ? ORDER BY
 $stmt_cat->execute([$uid]);
 $categorias = $stmt_cat->fetchAll();
 
-$stmt_cartoes = $pdo->prepare("SELECT cartoid, cartonome, cartofechamento FROM cartoes WHERE usuarioid = ? ORDER BY cartonome ASC");
+$stmt_cartoes = $pdo->prepare("SELECT cartoid, cartonome, cartofechamento, cartovencimento FROM cartoes WHERE usuarioid = ? ORDER BY cartonome ASC");
 $stmt_cartoes->execute([$uid]);
 $cartoes = $stmt_cartoes->fetchAll();
 ?>
@@ -51,13 +51,7 @@ $cartoes = $stmt_cartoes->fetchAll();
     .ts-dropdown .active { background-color: #e2e8f0 !important; color: #000 !important; }
 
     /* Switch */
-    .switch-container { 
-        background: #f8fafc; border: 2px solid #e2e8f0; 
-        padding: 16px; border-radius: 16px; 
-        display: flex; justify-content: space-between; align-items: center; 
-        margin-bottom: 20px; cursor: pointer; transition: 0.2s; 
-    }
-    .switch-container:active { background-color: #f1f5f9; transform: scale(0.98); }
+    .switch-container { background: #f8fafc; border: 2px solid #e2e8f0; padding: 16px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; cursor: pointer; transition: 0.2s; }
     .switch-container.active { border-color: #4361ee; background-color: #eff6ff; }
     .form-check-input { width: 3em; height: 1.5em; cursor: pointer; }
 
@@ -104,10 +98,10 @@ $cartoes = $stmt_cartoes->fetchAll();
                     </div>
 
                     <div class="mb-4">
-                        <label class="label-app">Categoria</label>
+                        <label class="label-app">Categoria *</label>
                         <div class="d-flex gap-2">
                             <div style="flex: 1;">
-                                <select id="selectCategoria" name="categoriaid" placeholder="Buscar categoria..." autocomplete="off">
+                                <select id="selectCategoria" name="categoriaid" placeholder="Buscar categoria..." autocomplete="off" required>
                                     <option value="">Selecione...</option>
                                     <?php foreach($categorias as $cat): 
                                         $tipo_banco = ($cat['categoriatipo'] == 'Receita') ? 'Entrada' : 'Saída'; 
@@ -128,9 +122,12 @@ $cartoes = $stmt_cartoes->fetchAll();
                     <div id="divCartao" style="<?= $tipo_pre == 'Entrada' ? 'display:none;' : '' ?>">
                         <label class="label-app">Forma de Pagamento</label>
                         <select name="cartoid" id="selectCartao" placeholder="Buscar cartão..." autocomplete="off">
-                            <option value="" data-fechamento="0">Saldo em Conta / Débito</option>
+                            <option value="" data-fechamento="0" data-vencimento="0">Saldo em Conta / Débito</option>
                             <?php foreach($cartoes as $cartao): ?>
-                                <option value="<?= $cartao['cartoid'] ?>" data-fechamento="<?= $cartao['cartofechamento'] ?>" <?= ($cartao['cartoid'] == $car_pre) ? 'selected' : '' ?>>
+                                <option value="<?= $cartao['cartoid'] ?>" 
+                                        data-fechamento="<?= $cartao['cartofechamento'] ?>" 
+                                        data-vencimento="<?= $cartao['cartovencimento'] ?>"
+                                        <?= ($cartao['cartoid'] == $car_pre) ? 'selected' : '' ?>>
                                     💳 <?= $cartao['cartonome'] ?>
                                 </option>
                             <?php endforeach; ?>
@@ -177,10 +174,7 @@ $cartoes = $stmt_cartoes->fetchAll();
         <div class="modal-content border-0 shadow" style="border-radius: 24px;">
             <div class="modal-body p-4">
                 <h6 class="fw-bold mb-3">Nova Categoria</h6>
-                <div class="mb-3">
-                    <label class="label-app">Nome</label>
-                    <input type="text" id="nome_nova_categoria" class="form-control input-app">
-                </div>
+                <div class="mb-3"><label class="label-app">Nome</label><input type="text" id="nome_nova_categoria" class="form-control input-app"></div>
                 <div class="mb-3">
                     <label class="label-app">Tipo</label>
                     <select id="tipo_nova_categoria" class="form-select input-app">
@@ -205,9 +199,27 @@ $cartoes = $stmt_cartoes->fetchAll();
     const boxFixa = document.getElementById('boxFixa');
     const checkFixa = document.getElementById('checkFixa');
     const divParcelas = document.getElementById('containerParcelas');
+    const formLancamento = document.getElementById('formLancamento');
+
+    // --- VALIDAÇÃO OBRIGATÓRIA DA CATEGORIA ---
+    formLancamento.addEventListener('submit', function(e) {
+        // Verifica se o TomSelect de categoria tem valor
+        const catVal = tomCategoria ? tomCategoria.getValue() : document.getElementById('selectCategoria').value;
+        
+        if (!catVal) {
+            e.preventDefault(); // Impede envio
+            alert("Por favor, selecione uma Categoria!");
+            
+            // Tenta abrir/focar o select
+            if(tomCategoria) {
+                tomCategoria.focus();
+                tomCategoria.open();
+            }
+            return false;
+        }
+    });
 
     window.addEventListener('DOMContentLoaded', () => {
-        // TomSelect Categoria
         if (document.getElementById('selectCategoria')) {
             tomCategoria = new TomSelect('#selectCategoria', {
                 create: false, sortField: { field: "text", direction: "asc" }, allowEmptyOption: true,
@@ -216,14 +228,10 @@ $cartoes = $stmt_cartoes->fetchAll();
             filtrarCategorias();
         }
 
-        // TomSelect Cartão
         if (document.getElementById('selectCartao')) {
             tomCartao = new TomSelect('#selectCartao', {
                 create: false, sortField: { field: "text", direction: "asc" }, allowEmptyOption: true,
-                onChange: () => { 
-                    verificarPrevisaoFatura(); 
-                    verificarMeta(); 
-                }
+                onChange: () => { verificarPrevisaoFatura(); verificarMeta(); }
             });
         }
         
@@ -231,11 +239,9 @@ $cartoes = $stmt_cartoes->fetchAll();
         atualizarParcelasVisibilidade();
     });
 
-    // Lógica UX Fixa
     function toggleFixa(fromCheckbox = false) {
         if (!fromCheckbox) checkFixa.checked = !checkFixa.checked;
-        if(checkFixa.checked) boxFixa.classList.add('active');
-        else boxFixa.classList.remove('active');
+        if(checkFixa.checked) boxFixa.classList.add('active'); else boxFixa.classList.remove('active');
         atualizarParcelasVisibilidade();
     }
 
@@ -248,7 +254,6 @@ $cartoes = $stmt_cartoes->fetchAll();
         }
     }
 
-    // --- CORREÇÃO AQUI: Lógica de Exibição da Fatura ---
     function verificarPrevisaoFatura() {
         const cartaoId = tomCartao ? tomCartao.getValue() : '';
         const dataSelecionada = inputData.value;
@@ -264,32 +269,26 @@ $cartoes = $stmt_cartoes->fetchAll();
 
         const selectOriginal = document.getElementById('selectCartao');
         const optionSelecionada = selectOriginal.querySelector(`option[value="${cartaoId}"]`);
-        const diaFechamento = optionSelecionada ? (parseInt(optionSelecionada.getAttribute('data-fechamento')) || 1) : 1;
+        
+        const diaFechamento = parseInt(optionSelecionada.getAttribute('data-fechamento')) || 1;
+        const diaVencimento = parseInt(optionSelecionada.getAttribute('data-vencimento')) || 1;
 
         const dateObj = new Date(dataSelecionada + "T12:00:00");
         const diaCompra = dateObj.getDate();
-        
-        // Clona a data e seta para o dia 1 para evitar bugs de virada de mês (ex: 31 jan -> fev)
         let dataFatura = new Date(dateObj);
         dataFatura.setDate(1); 
 
-        // LÓGICA DE CORTE:
-        if (diaCompra >= diaFechamento) {
-            // Se fechou dia 29 e comprei dia 29 -> Pula o mês atual E o próximo
-            // Ex: Compra 29 Dez -> Pula Jan -> Vence Fev
-            dataFatura.setMonth(dataFatura.getMonth() + 2);
-        } else {
-            // Se fechou dia 29 e comprei dia 28 -> Pula só o mês atual
-            // Ex: Compra 28 Dez -> Vence Jan
-            dataFatura.setMonth(dataFatura.getMonth() + 1);
-        }
+        let mesesParaAdicionar = 0;
+        if (diaCompra >= diaFechamento) { mesesParaAdicionar = 1; }
+        if (diaVencimento < diaFechamento) { mesesParaAdicionar++; }
+
+        dataFatura.setMonth(dataFatura.getMonth() + mesesParaAdicionar);
 
         const nomeMes = dataFatura.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
         feedbackFatura.innerHTML = `<span class="badge-fatura"><i class="bi bi-calendar-check"></i> Fatura Vence em: ${nomeMes.charAt(0).toUpperCase() + nomeMes.slice(1)}</span>`;
         feedbackFatura.style.display = 'block';
     }
 
-    // ... (Resto do código mantido igual: verificarMeta, listeners, etc) ...
     function verificarMeta() {
         const catId = tomCategoria ? tomCategoria.getValue() : '';
         const cartaoId = tomCartao ? tomCartao.getValue() : '';
